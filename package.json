@@ -1,0 +1,20 @@
+{
+  "name": "ultimos-dias",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "\u00daltimos Dias - sobreviv\u00eancia zumbi online (PC e celular)",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "colyseus": "0.17.10",
+    "@colyseus/schema": "4.0.30",
+    "@colyseus/ws-transport": "0.17.13",
+    "mongodb": "7.5.0",
+    "express": "^4.21.2"
+  }
+}

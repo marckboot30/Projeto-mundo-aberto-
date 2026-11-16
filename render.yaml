@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: ultimos-dias
+    runtime: node
+    plan: free
+    branch: ultimos-dias
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /saude
