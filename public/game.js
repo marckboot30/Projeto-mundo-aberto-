@@ -797,9 +797,17 @@ function genPrisao(ch) {
   makeCar(gx + 10, Z1 + 3.5, false, 0xe0e0d8, 'Viatura', 'delegacia');
 }
 function genServico(ch, kind) {
-  const sizes = { bombeiros: [24, 16, 6, 0xa84a3a], delegacia: [16, 12, 5, 0x6a7a8a], hospital: [30, 20, 9, 0xe0e0dc] }[kind];
-  const b = B2({ x: ch.x0 + 7 + sizes[0] / 2 + 2, z: ch.z0 + 8 + sizes[1] / 2, kind, door: 'n', w: sizes[0], d: sizes[1], h: sizes[2], wallC: sizes[3] });
-  if (kind === 'bombeiros') makeCar(b.x1 + 9, ch.z0 + 20, true, 0xc02a20, 'Caminhão de bombeiros', 'bombeiros', true);
+  const sizes = { bombeiros: [26, 18, 6.4, 0xb8382e], delegacia: [16, 12, 5, 0x6a7a8a], hospital: [30, 20, 9, 0xe0e0dc] }[kind];
+  const QB = kind === 'bombeiros';
+  const b = B2({ x: ch.x0 + (QB ? 10 : 9) + sizes[0] / 2, z: ch.z0 + (QB ? 14 : 8) + sizes[1] / 2, kind, door: 'n', w: sizes[0], d: sizes[1], h: sizes[2], wallC: sizes[3] });
+  if (QB) { // pátio de concreto na frente dos portões, calçada, mastro e hidrante
+    plane(11, b.z1 + 2 - (ch.z0 + 6), 0x9c9c98, b.x1 + 5.5, (ch.z0 + 6 + b.z1 + 2) / 2, .026, 'concreto', 3); CUR.keep.push([b.x1, b.x1 + 11.5, ch.z0 + 5, b.z1 + 3]);
+    for (const gz of b.gates) for (const sd of [-1, 1]) plane(9, .14, 0xf0f0ea, b.x1 + 5, gz + sd * 2.1, .032);
+    plane(3, b.z0 - (ch.z0 + 6), 0xb8b4ac, b.x, (ch.z0 + 6 + b.z0) / 2, .026, 'concreto', 1.5);
+    const fx = b.x - 4, fz = b.z0 - 3; FB.geo(cylG, 0xd8d8d8, null, fx, 3.5, fz, 0, 0, 0, .1, 7, .1); FB.box(1.4, .9, .02, 0x2a8a3a, fx + .75, 6.4, fz); FB.box(.7, .45, .03, 0xf0d020, fx + .75, 6.4, fz); addCol({ cx: fx, cz: fz, r: .1 });
+    const hx2 = b.x1 + 1.2, hz2 = b.z0 - 1.5; FB.geo(cylG, 0xd02a20, null, hx2, .35, hz2, 0, 0, 0, .3, .7, .3); FB.geo(sphG, 0xd02a20, null, hx2, .72, hz2, 0, 0, 0, .3, .2, .3); FB.geo(cylG, 0xc8c8c8, null, hx2, .45, hz2, 0, 0, PI / 2, .12, .5, .12); addCol({ cx: hx2, cz: hz2, r: .2 });
+    makeCar(b.x1 - 5.2, b.gates[0], false, 0xc02a20, 'Caminhão de bombeiros', 'bombeiros', true);
+  }
   if (kind === 'delegacia') { makeCar(b.x1 + 6, ch.z0 + 14, true, 0x1e1e22, 'Viatura', 'delegacia'); makeCar(b.x1 + 11, ch.z0 + 14, true, 0xe8e8e0, 'Viatura', 'delegacia'); }
   if (kind === 'hospital') makeCar(b.x1 + 7, ch.z0 + 16, true, 0xf0f0ec, 'Ambulância', 'hospital', true);
   houseRow(ch, 's', 0); backyard(ch, 6);
@@ -907,13 +915,14 @@ function building(o) {
   const { x, z, w, d, h, door } = b, t = 0.3;
   b.x0 = x - w / 2; b.x1 = x + w / 2; b.z0 = z - d / 2; b.z1 = z + d / 2;
   const wc = b.wallC || 0xaaaaaa, gap = 1.8;
-  const k = b.kind, wtex = (k === 'casa' || k === 'casafazenda') ? 'tabuas' : (k === 'celeiro' || k === 'cabana' || k === 'galinheiro') ? 'madeira' : (k === 'mercado' || k === 'posto' || k === 'prisao' || k === 'armazem' || k === 'hospital') ? 'concreto' : 'tijolo';
+  const k = b.kind, wtex = (k === 'casa' || k === 'casafazenda') ? 'tabuas' : (k === 'celeiro' || k === 'cabana' || k === 'galinheiro') ? 'madeira' : (k === 'mercado' || k === 'posto' || k === 'prisao' || k === 'armazem' || k === 'hospital' || k === 'bombeiros') ? 'concreto' : 'tijolo';
   const wtile = wtex === 'tijolo' ? 1.6 : wtex === 'concreto' ? 3 : 2.2;
   const DBb = new Batch(), DBf = new Batch(); // fundo (paredes norte/oeste ficam em pé) e frente
   const DB = { box: (w2, h2, d2, c, px, py, pz, ry, tex, tile) => ((pz < b.z0 + .6 || px < b.x0 + .6) ? DBb : DBf).box(w2, h2, d2, c, px, py, pz, ry, tex, tile) };
   const interior = k === 'casa' || k === 'casafazenda' || k === 'apartamento';
   const isHouse = k === 'casa' || k === 'casafazenda';
-  const trim = isHouse ? 0xf2eee4 : k === 'celeiro' ? 0xeeeeea : 0xd8d4cc;
+  const QB = k === 'bombeiros'; // quartel dos bombeiros: garagem com portões no lado leste
+  const trim = isHouse ? 0xf2eee4 : k === 'celeiro' || QB ? 0xf2f0ea : 0xd8d4cc;
   const shutC = [0x2e4a3a, 0x2a3a5a, 0x5a3a2a, 0x3a3a3a][Math.floor(dr() * 4)];
   const win = (px, py, pz, alongX, ww, wh) => { // janela com moldura, vidro, cruz, peitoril e venezianas
     const ry = alongX ? 0 : PI / 2;
@@ -964,11 +973,25 @@ function building(o) {
     for (const fx of split ? [x - w / 3.4, x + w / 3.4] : [x - w / 4, x + w / 4]) if (k !== 'celeiro') win(fx, 1.6, zc, true, Math.min(1.6, w / 6), 1.0);
   };
   const wallZ = (xc) => { tbox(t, h, d, wc, wtex, wtile, xc, h / 2, z); addCol({ x0: xc - t / 2, x1: xc + t / 2, z0: b.z0, z1: b.z1, wall: true, h }); lining(d - 2 * t, false, xc + (xc === b.x0 ? 1 : -1) * (t / 2 + .016), z); if (k !== 'celeiro') win(xc, 1.6, z, false, Math.min(1.6, d / 4), 1.0); };
-  wallX(b.z0, door === 'n'); wallX(b.z1, door === 's'); wallZ(b.x0); wallZ(b.x1);
+  const garageWall = (xc) => { // parede com dois portões grandes (portas de enrolar abertas)
+    const gw = 4.4, gh = 3.0, zs = [z - d / 4, z + d / 4]; b.gates = zs;
+    const cuts = [b.z0]; for (const zz of zs) cuts.push(zz - gw / 2, zz + gw / 2); cuts.push(b.z1);
+    for (let i = 0; i < cuts.length; i += 2) {
+      const a = cuts[i], c = cuts[i + 1], len = c - a, mid = (a + c) / 2;
+      tbox(t, h, len, wc, wtex, wtile, xc, h / 2, mid); addCol({ x0: xc - t / 2, x1: xc + t / 2, z0: a, z1: c, wall: true, h });
+      lining(len - (a === b.z0 ? t : 0) - (c === b.z1 ? t : 0), false, xc - (t / 2 + .016), mid + (a === b.z0 ? t / 2 : 0) - (c === b.z1 ? t / 2 : 0));
+    }
+    for (const zz of zs) {
+      tbox(t, h - gh, gw, wc, wtex, wtile, xc, gh + (h - gh) / 2, zz);
+      DB.box(t + .16, .2, gw + .4, trim, xc, gh + .02, zz); for (const sd of [-1, 1]) DB.box(t + .16, gh, .2, trim, xc, gh / 2, zz + sd * (gw / 2 + .1));
+      DB.box(.5, .42, gw - .02, 0xdcdee0, xc - .22, gh - .24, zz); for (let i = 0; i < 3; i++) DB.box(.52, .02, gw - .06, 0xa4a8ac, xc - .22, gh - .38 + i * .13, zz);
+    }
+  };
+  wallX(b.z0, door === 'n'); wallX(b.z1, door === 's'); wallZ(b.x0); if (QB) garageWall(b.x1); else wallZ(b.x1);
   const floorYs = []; if (k === 'apartamento') for (let l = 1; l < Math.round(h / FLOOR_H); l++) floorYs.push(l * FLOOR_H + 1.6); else if (h > 5 && k !== 'celeiro') for (let y = 4.4; y < h - 1; y += 2.6) floorYs.push(y);
   for (const y of floorYs) { // janelas dos andares
     for (let kk = -1; kk <= 1; kk++) { win(x + kk * w / 3.3, y, b.z0, true, 1.4, 1.1); win(x + kk * w / 3.3, y, b.z1, true, 1.4, 1.1); }
-    for (const xc of [b.x0, b.x1]) win(xc, y, z, false, 1.4, 1.1);
+    for (const xc of [b.x0, b.x1]) if (!(QB && xc === b.x1)) win(xc, y, z, false, 1.4, 1.1);
   }
   // quinas, rodapé de pedra e faixas entre andares
   for (const [cx2, cz2] of [[b.x0, b.z0], [b.x1, b.z0], [b.x0, b.z1], [b.x1, b.z1]]) DB.box(t + .14, h, t + .14, trim, cx2, h / 2, cz2);
@@ -999,11 +1022,14 @@ function building(o) {
     const fasc = new T.Mesh(boxG, M(trim)); fasc.scale.set(w + .28, .1, .1); for (const sd of [-1, 1]) { const f2 = fasc.clone(); f2.position.set(0, .02, sd * hw); b.roof.add(f2); }
     if (isHouse && dr() < .6) { const ch = tbox(.6, 1.6, .6, 0x9a5a48, 'tijolo', .8, 0, 0, 0); ROOT.remove(ch); ch.position.set(w / 2 - 1.4, rh * .55, -hw * .35); ch.matrixAutoUpdate = true; b.roof.add(ch); const cap = new T.Mesh(boxG, M(0x5a5a5a)); cap.scale.set(.72, .1, .72); cap.position.set(w / 2 - 1.4, rh * .55 + .82, -hw * .35); b.roof.add(cap); }
   } else {
-    b.roof = tbox(w + .3, .35, d + .3, 0x6a6662, 'concreto', 3, x, h + .17, z);
+    b.roof = tbox(w + .3, .35, d + .3, QB ? 0x58595d : 0x6a6662, 'concreto', 3, x, h + .17, z);
     const add = (sx, sy, sz, c, px2, py2, pz2) => { const m2 = new T.Mesh(boxG, M(c)); m2.scale.set(sx, sy, sz); m2.position.set(px2 - x, py2 - h - .17, pz2 - z); b.roof.add(m2); m2.updateMatrix(); return m2; };
     for (const sd of [-1, 1]) { add(w + .3, .4, .12, trim, x, h + .55, z + sd * (d / 2 + .09)); add(.12, .4, d + .3, trim, x + sd * (w / 2 + .09), h + .55, z); }
-    if (h > 5) { add(1.2, .7, .9, 0xa8aaae, x - w / 4, h + .7, z - d / 5); add(.8, .08, .6, 0x5a5e62, x - w / 4, h + 1.08, z - d / 5); const tank = new T.Mesh(cylG, M(0x3a6a9a)); tank.scale.set(1.3, 1.1, 1.3); tank.position.set(w / 5, .9, d / 6); b.roof.add(tank); }
-    if (k === 'posto' || k === 'mercado' || k === 'bombeiros' || k === 'hospital' || k === 'farmacia' || k === 'delegacia') b.decor.push(box(Math.min(w * .6, 10), .9, .12, { posto: 0xc0392b, mercado: 0x2a7a4a, bombeiros: 0xc02a20, hospital: 0xd03030, farmacia: 0x2a9a5a, delegacia: 0x2a4a8a }[k], x, h - .2, door === 's' ? b.z1 + .2 : b.z0 - .2));
+    if (QB) roofQuartel(b, add, x, z, w, d, h);
+    else if (h > 5) { add(1.2, .7, .9, 0xa8aaae, x - w / 4, h + .7, z - d / 5); add(.8, .08, .6, 0x5a5e62, x - w / 4, h + 1.08, z - d / 5); const tank = new T.Mesh(cylG, M(0x3a6a9a)); tank.scale.set(1.3, 1.1, 1.3); tank.position.set(w / 5, .9, d / 6); b.roof.add(tank); }
+    if (QB) { const sE = textSign('BOMBEIROS', 7, 1.25); sE.position.set(b.x1 + t / 2 + .05, 4.65, z); sE.rotation.y = PI / 2; ROOT.add(sE); b.decor.push(sE);
+      const sN = textSign('BOMBEIROS', 3.2, .58); sN.position.set(x, 2.8, b.z0 - t / 2 - .05); sN.rotation.y = PI; ROOT.add(sN); b.decor.push(sN); }
+    if (k === 'posto' || k === 'mercado' || k === 'hospital' || k === 'farmacia' || k === 'delegacia') b.decor.push(box(Math.min(w * .6, 10), .9, .12, { posto: 0xc0392b, mercado: 0x2a7a4a, bombeiros: 0xc02a20, hospital: 0xd03030, farmacia: 0x2a9a5a, delegacia: 0x2a4a8a }[k], x, h - .2, door === 's' ? b.z1 + .2 : b.z0 - .2));
   }
   const s = door === 's' ? 1 : -1, dz = door === 's' ? b.z1 : b.z0;
   b.doorX = x; b.doorZ = dz;
@@ -1193,13 +1219,7 @@ function furnish(b) {
       put(W / 2 - 6, 9, 3, 0.8, 1.2, 0x6a5038, { loot: 'prisao', nome: 'Mesa' });
       put(W / 2 - 3, 0.1, 2, 2, 0.6, 0x4a5058, { loot: 'prisao', nome: 'Armário de armas' });
       break;
-    case 'bombeiros':
-      for (let i = 0; i < 5; i++) put(-W / 2 + 2 + i * 2.4, 0.05, 1.6, 2, 0.6, 0xa03a2a, { loot: 'bombeiros', nome: 'Armário' });
-      put(W / 2 - 3, 0.2, 1.4, 1.1, 1.4, 0x8a6a40, { loot: 'bombeiros', nome: 'Caixote' });
-      put(W / 2 - 5, 0.2, 1.4, 1.1, 1.4, 0x8a6a40, { loot: 'bombeiros', nome: 'Caixote' });
-      put(0, 6, 3, 0.8, 1.2, 0x6a5038, { loot: 'bombeiros', nome: 'Mesa' });
-      for (let i = 0; i < 3; i++) put(-W / 2 + 2 + i * 2.2, 9, 1.2, 0.5, 2.0, 0x7a8aa0, { bed: true, nome: 'Cama' });
-      break;
+    case 'bombeiros': furnishQuartel(b); break;
     case 'hospital':
       for (let i = 0; i < 6; i++) put(-W / 2 + 2.5 + i * 4.6, 0.1, 1.2, 0.6, 2.0, 0xe8e8f0, { bed: true, nome: 'Cama' });
       for (const u of [-8, -2, 4, 10]) put(u, 9, 3, 1.8, 0.7, 0xd8dce0, { loot: 'hospital', nome: 'Prateleira' });
@@ -1224,6 +1244,119 @@ function furnish(b) {
       put(4.5, 6, 1.4, 1.1, 1.4, 0x8a6a40, { loot: 'celeiro', nome: 'Caixote' });
       break;
     }
+  }
+}
+// ---- quartel dos bombeiros: placa, telhado com heliponto, divisórias e móveis
+const signCache = {};
+function textSign(txt, w2, h2) {
+  let mat = signCache[txt];
+  if (!mat) {
+    const c = document.createElement('canvas'); c.width = 512; c.height = 112; const g = c.getContext('2d');
+    g.fillStyle = '#2b2d31'; g.fillRect(0, 0, 512, 112); g.fillStyle = '#c0392b'; g.fillRect(0, 98, 512, 14);
+    g.fillStyle = '#ffffff'; g.font = 'bold 76px Arial, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, 256, 52);
+    const tx = new T.CanvasTexture(c); tx.colorSpace = T.SRGBColorSpace; tx.anisotropy = 4; mat = signCache[txt] = new T.MeshLambertMaterial({ map: tx });
+  }
+  return new T.Mesh(ownGeo(new T.PlaneGeometry(w2, h2)), mat);
+}
+function roofQuartel(b, add, x, z, w, d, h) {
+  const top = .19, disc = (r, c, y, ox, oz) => { const m = new T.Mesh(cylG, M(c)); m.scale.set(r * 2, .03, r * 2); m.position.set(ox, top + y, oz); b.roof.add(m); };
+  const hx = -w / 4 + .3; // heliponto
+  disc(3.7, 0xf0f0ec, 0, hx, 0); disc(3.45, 0xe8b820, .012, hx, 0); disc(3.0, 0x3c3e42, .024, hx, 0);
+  const yH = h + .17 + top + .05;
+  for (const sd of [-1, 1]) add(.5, .03, 2.6, 0xe8b820, x + hx + sd * .75, yH, z); add(1.0, .03, .45, 0xe8b820, x + hx, yH, z);
+  for (const [ox, oz] of [[3.9, 0], [-3.9, 0], [0, 3.9], [0, -3.9]]) add(.16, .14, .16, 0xe02a20, x + hx + ox, yH + .05, z + oz);
+  for (const i of [0, 1]) { add(1.2, .75, 1.0, 0xb8bcc0, x + w / 5 + i * 1.7, h + .17 + .55, z + d / 4); add(.8, .04, .8, 0x4a4e52, x + w / 5 + i * 1.7, h + .17 + .94, z + d / 4); }
+  for (let i = 0; i < 4; i++) { const m = new T.Mesh(cylG, M(i % 2 ? 0xf2f2f2 : 0xd02a20)); m.scale.set(.12, 1, .12); m.position.set(w / 2 - 1.6, top + .5 + i, -d / 2 + 1.6); b.roof.add(m); }
+}
+function quartelPart(b, ax, az, bx, bz, holes) { // divisória interna com vãos de porta
+  const alongX = az === bz, a0 = alongX ? Math.min(ax, bx) : Math.min(az, bz), a1 = alongX ? Math.max(ax, bx) : Math.max(az, bz), H = 3.0, th = .16;
+  const cuts = [a0]; for (const c of holes.sort((p, q) => p - q)) cuts.push(c - .75, c + .75); cuts.push(a1);
+  if (!b.parts) b.parts = [];
+  for (let i = 0; i < cuts.length; i += 2) {
+    const s0 = cuts[i], s1 = cuts[i + 1], len = s1 - s0, mid = (s0 + s1) / 2; if (len < .05) continue;
+    const m = alongX ? tbox(len, H, th, 0xe6e0d2, 'pintura', 2, mid, H / 2, az) : tbox(th, H, len, 0xe6e0d2, 'pintura', 2, ax, H / 2, mid);
+    m.visible = false; m.matrixAutoUpdate = true;
+    const cap = alongX ? tbox(len + .02, .06, th + .04, 0xf4f2ec, null, 1, mid, H, az) : tbox(th + .04, .06, len + .02, 0xf4f2ec, null, 1, ax, H, mid); cap.visible = false;
+    addCol(alongX ? { x0: s0, x1: s1, z0: az - th / 2, z1: az + th / 2, wall: true, h: H } : { x0: ax - th / 2, x1: ax + th / 2, z0: s0, z1: s1, wall: true, h: H });
+    b.parts.push({ m, cap, H, ax: alongX ? s0 : ax, az: alongX ? az : s0, bx: alongX ? s1 : ax, bz: alongX ? az : s1 });
+  }
+}
+function updateParts(b) { // como no PZ: divisória entre a câmera e o jogador fica baixinha
+  if (!b || !b.parts) return;
+  const cx = Math.sin(camYaw), cz = Math.cos(camYaw);
+  for (const p of b.parts) {
+    const dx = p.bx - p.ax, dz = p.bz - p.az, L2 = dx * dx + dz * dz || 1, u = clamp(((P.x - p.ax) * dx + (P.z - p.az) * dz) / L2, 0, 1);
+    const qx = p.ax + dx * u - P.x, qz = p.az + dz * u - P.z, low = qx * cx + qz * cz > -.25;
+    const k = low ? .5 / p.H : 1; if (p.m.scale.y === k) continue;
+    p.m.scale.y = k; p.m.position.y = p.H * k / 2; p.cap.visible = !low;
+  }
+}
+function furnishQuartel(b) {
+  const t = .3, X0 = b.x0 + t / 2, X1 = b.x1 - t / 2, Z0 = b.z0 + t / 2, Z1 = b.z1 - t / 2, zc = b.z, xg = b.x1 - 11.5, zA = zc - 1.1, zB = zc + 1.1;
+  const F = (nome, px, pz, fw, fh, fd, color, ry, extra) => {
+    if (nome) drawFurn(nome, px, pz, fw, fh, fd, color, ry);
+    const rot = Math.abs(Math.sin(ry)) > .5, hx = rot ? fd / 2 : fw / 2, hz = rot ? fw / 2 : fd / 2;
+    addCol({ x0: px - hx, x1: px + hx, z0: pz - hz, z1: pz + hz });
+    const o = Object.assign({ x: px, z: pz, hx, hz, ry, b }, extra || {});
+    if (o.loot) { o.items = rollLoot(o.loot); containers.push(o); }
+    if (o.bed) beds.push(o); if (o.sink) sinks.push(o);
+    return o;
+  };
+  // pisos de cada área
+  plane(X1 - xg, Z1 - Z0, 0x76787c, (xg + X1) / 2, b.z, .03, 'concreto', 3); // garagem
+  for (const gz of b.gates) { for (const sd of [-1, 1]) plane(7.6, .14, 0xe8c020, X1 - 4.2, gz + sd * 1.7, .036); plane(.14, 3.54, 0xe8c020, X1 - 8, gz, .036); }
+  plane(.5, Z1 - Z0, 0xe8c020, X1 - .45, b.z, .034); // faixa no portão
+  plane(xg - X0, zB - zA, 0xd2cec4, (X0 + xg) / 2, zc, .03, 'piso', 1.2); // corredor
+  plane(7, zA - Z0, 0xb8bec4, (X0 + X0 + 7) / 2, (Z0 + zA) / 2, .03, 'piso', 1); // vestiário
+  plane(xg - X0 - 7, zA - Z0, 0x6a4a34, (X0 + 7 + xg) / 2, (Z0 + zA) / 2, .03, 'madeira', 2); // escritório
+  plane(8, Z1 - zB, 0x8a6a4a, (X0 + X0 + 8) / 2, (zB + Z1) / 2, .03, 'madeira', 2); // dormitório
+  plane(xg - X0 - 8, Z1 - zB, 0xe6e2da, (X0 + 8 + xg) / 2, (zB + Z1) / 2, .03, 'piso', 1); // cozinha
+  // divisórias
+  quartelPart(b, xg, Z0, xg, Z1, [zc]);
+  quartelPart(b, X0, zA, xg, zA, [X0 + 3.5, X0 + 11]);
+  quartelPart(b, X0, zB, xg, zB, [X0 + 4, X0 + 11.5]);
+  quartelPart(b, X0 + 7, Z0, X0 + 7, zA, []);
+  quartelPart(b, X0 + 8, zB, X0 + 8, Z1, []);
+  // GARAGEM: prateleiras, caixa de ferramentas, bancada, mangueiras e extintores
+  for (const pz of [Z0 + 1.2, Z0 + 3.3, Z1 - 1.2, Z1 - 3.3]) F('Prateleira', xg + .55, pz, 1.9, 1.9, .7, 0x6a6e76, PI / 2, { loot: 'ferragens', nome: 'Prateleira' });
+  { const px = xg + 3.2, pz = Z0 + .4; FB.box(1.2, .9, .55, 0xc0392b, px, .45, pz); for (let i = 0; i < 4; i++) FB.box(1.1, .02, .02, 0x3a1a18, px, .2 + i * .2, pz + .28); FB.box(1.2, .3, .5, 0xd84a3a, px, 1.05, pz); F(null, px, pz, 1.2, 1, .55, 0, 0, { loot: 'ferragens', nome: 'Caixa de ferramentas' }); }
+  { const px = xg + 5.6, pz = Z0 + .45; FB.box(2.2, .06, .7, 0x8a6a48, px, .9, pz, 0, 'madeira', 1); for (const a of [-1, 1]) FB.box(.08, .88, .6, 0x4a4e54, px + a * 1.0, .44, pz); FB.box(2.1, .5, .04, 0x5a5e66, px, 1.35, Z0 + .04); FB.box(.4, .12, .2, 0x2a5aa0, px - .5, .99, pz); FB.box(.3, .2, .25, 0xd8a020, px + .4, 1.03, pz);
+    F(null, px, pz, 2.2, .95, .7, 0, 0, { loot: 'bombeiros', nome: 'Bancada' }); }
+  for (const i of [0, 1, 2]) { const px = xg + 4 + i * 1.4, pz = Z1 - .25; FB.geo(cylG, 0xc02a20, null, px, 1.5, pz, 0, PI / 2, 0, .9, .25, .9); FB.geo(cylG, 0xe8e4d8, null, px, 1.5, pz, 0, PI / 2, 0, .75, .27, .75); FB.box(.1, 1.5, .08, 0x4a4e54, px, .75, pz + .06); }
+  for (const pz of [zc - 2.2, zc + 2.2]) { FB.geo(cylG, 0xd02a20, null, xg + .2, .4, pz, 0, 0, 0, .22, .55, .22); FB.box(.06, .12, .06, 0x1a1a1a, xg + .2, .74, pz); }
+  for (const [px, pz] of [[X1 - 1, Z0 + .8], [X1 - 1.6, Z0 + .8], [X1 - 1, Z1 - .8]]) { FB.geo(cylG, 0xf07a20, null, px, .3, pz, 0, 0, 0, .3, .6, .3); FB.box(.4, .04, .4, 0x2a2a2a, px, .02, pz); FB.box(.31, .08, .31, 0xf4f4f4, px, .36, pz); }
+  // VESTIÁRIO: roupas de bombeiro penduradas, armários de metal e banco
+  for (let i = 0; i < 4; i++) {
+    const px = X0 + 1.0 + i * 1.3, pz = Z0 + .35;
+    FB.box(1.15, 2.1, .06, 0x5a5e66, px, 1.05, Z0 + .03); FB.box(1.15, .05, .6, 0x6a6e76, px, 1.75, pz); FB.box(1.15, .05, .6, 0x6a6e76, px, .3, pz); for (const a of [-1, 1]) FB.box(.05, 2.1, .6, 0x6a6e76, px + a * .56, 1.05, pz);
+    FB.box(.62, .8, .26, 0xc8a24a, px, 1.15, pz + .02); for (const y of [.88, 1.3]) FB.box(.64, .05, .28, 0xd8e070, px, y, pz + .02); FB.box(.62, .04, .27, 0x8a8a8a, px, .9, pz + .02);
+    FB.geo(sphG, i % 2 ? 0xd02a20 : 0x1e1e20, null, px, 1.92, pz, 0, 0, 0, .34, .26, .38); FB.box(.4, .02, .5, i % 2 ? 0xd02a20 : 0x1e1e20, px, 1.8, pz + .03);
+    for (const a of [-1, 1]) FB.box(.14, .3, .26, 0x1e1e1e, px + a * .12, .48, pz + .05);
+    F(null, px, pz, 1.15, 2.1, .6, 0, 0, { loot: 'bombeiros', nome: 'Equipamento de bombeiro' });
+  }
+  for (const pz of [Z0 + 2.4, Z0 + 3.4, Z0 + 4.4, Z0 + 5.4]) F('Armário', X0 + .32, pz, .95, 1.9, .55, 0x4a5058, PI / 2, { loot: 'bombeiros', nome: 'Armário' });
+  { const px = X0 + 3.6, pz = Z0 + 4.2; FB.box(2.4, .06, .4, 0x9a7048, px, .46, pz, 0, 'madeira', 1); for (const a of [-1, 1]) FB.box(.06, .44, .34, 0x4a4e54, px + a * 1.05, .22, pz); F(null, px, pz, 2.4, .5, .4, 0, 0); }
+  // ESCRITÓRIO / RECEPÇÃO
+  { const xo = X0 + 7;
+    F('Balcão', xo + 2.2, Z0 + 2.2, 2.4, 1.05, .7, 0x7a5236, PI, { loot: 'gaveta', nome: 'Balcão' });
+    for (const px of [xo + 1.9, xo + 5.9]) { F('Escrivaninha', px, zA - .45, 1.3, .78, .65, 0, PI, { loot: 'gaveta', nome: 'Gaveta da mesa' }); drawFurn('Cadeira', px, zA - 1.25, .45, .9, .45, 0, 0); addCol({ x0: px - .23, x1: px + .23, z0: zA - 1.48, z1: zA - 1.02 }); }
+    for (const pz of [Z0 + 3.4, Z0 + 4.3]) { const px = xg - .4; FB.box(.55, 1.3, .8, 0x8a9098, px, .65, pz); for (let i = 0; i < 3; i++) FB.box(.02, .3, .6, 0x6a7078, px - .28, .25 + i * .42, pz); F(null, px, pz, .55, 1.3, .8, 0, 0, { loot: 'gaveta', nome: 'Arquivo' }); }
+    { const px = xg - .45, pz = Z0 + 5.5; FB.box(.35, 1.0, .35, 0xe8e8e4, px, .5, pz); FB.geo(cylG, 0x4a8ad0, null, px, 1.22, pz, 0, 0, 0, .28, .42, .28); F(null, px, pz, .35, 1.4, .35, 0, 0); }
+    FB.box(1.6, .9, .04, 0xf4f4f2, xo + 4.0, 1.7, Z0 + .03); FB.box(1.5, .8, .045, 0xfafafa, xo + 4.0, 1.7, Z0 + .035);
+    plantAt(xo + .5, Z0 + .5, true);
+  }
+  // DORMITÓRIO
+  for (let i = 0; i < 4; i++) { const px = X0 + 1.0 + i * 1.95; F('Cama', px, Z1 - 1.05, 1.1, .55, 2.0, 0x7a8aa0, PI, { bed: true, nome: 'Cama' }); FB.box(.45, .55, .4, 0x7a5236, px + .85, .28, Z1 - .25, 0, 'madeira', 1); }
+  for (const pz of [zB + .9, zB + 1.9]) F('Guarda-roupa', X0 + .32, pz, .95, 1.9, .55, 0x6a4a30, PI / 2, { loot: 'armario', nome: 'Armário' });
+  // COZINHA E REFEITÓRIO
+  { const xo = X0 + 8;
+    F('Geladeira', xo + .6, Z1 - .4, .9, 1.9, .75, 0xdedede, PI, { loot: 'geladeira', nome: 'Geladeira' });
+    F('Pia', xo + 1.7, Z1 - .35, 1.2, .95, .65, 0xbab4a8, PI, { sink: true, nome: 'Pia' });
+    { const fg = F('Fogão', xo + 2.85, Z1 - .35, .9, .9, .62, 0xe8e6e2, PI, { nome: 'Fogão' }); addUse(fg.x, fg.z, fg.hx, fg.hz, () => 'Fogão: esquentar comida', cook); }
+    F('Armário', xo + 4.1, Z1 - .32, 1.4, .95, .6, 0x8a6244, PI, { loot: 'mercado', nome: 'Armário da cozinha' });
+    for (const px of [xo + 2.0, xo + 3.4]) { drawTable(px, zc + 4.6); for (const sd of [-1, 1]) { drawFurn('Cadeira', px, zc + 4.6 + sd * .75, .45, .9, .45, 0, sd < 0 ? 0 : PI); } }
+    addCol({ x0: xo + 1.3, x1: xo + 4.1, z0: zc + 4.15, z1: zc + 5.05 }); lateBox('Mesa', xo + 2.7, zc + 4.6, 1.4, .45, 'mesa');
+    FB.box(.04, .7, 1.2, 0x1a2430, xg - .1, 1.6, zc + 4.6); // TV na parede
   }
 }
 let delegaciaGarantida = false;
@@ -1272,6 +1405,7 @@ function setCut(b, mode) {
   for (const m of b.decor) m.visible = !mode;
   for (const m of b.decorBack) m.visible = mode !== 2;
   b.roof.visible = !mode;
+  if (b.parts) for (const p of b.parts) { p.m.visible = !!mode; p.cap.visible = !!mode; }
 }
 let fading = new Set();
 const fadeCache = new Map();
@@ -1286,6 +1420,7 @@ function cutaway() { // paredes e árvores entre a câmera e o jogador somem, co
   const cx = Math.sin(camYaw), cz = Math.cos(camYaw), px = cz, pz = -cx;
   const inside = buildingAt(P.x, P.z);
   for (const b of buildings) setCut(b, b === inside ? 1 : 0); // por dentro só aparece quando você entra
+  updateParts(inside);
   // prédio que tapa o jogador fica transparente (como no Project Zomboid)
   const tp = Math.tan(ISO_PITCH), fadeNow = new Set();
   for (const b of buildings) {
