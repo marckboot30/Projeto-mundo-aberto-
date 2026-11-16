@@ -1428,7 +1428,7 @@ class Part {
     _e.set(rx || 0, ry || 0, rz || 0); _q.setFromEuler(_e); _v.set(x || 0, y || 0, z || 0);
     _m4.compose(_v, _q, new T.Vector3(sx == null ? 1 : sx, sy == null ? 1 : sy, sz == null ? 1 : sz)); g.applyMatrix4(_m4);
     const c = new T.Color(color), n = g.attributes.position.count, col = new Float32Array(n * 3);
-    for (let i = 0; i < n; i++) { const k = .9 + ((i * 7919) % 13) / 60; col[i * 3] = c.r * k; col[i * 3 + 1] = c.g * k; col[i * 3 + 2] = c.b * k; }
+    for (let i = 0; i < n; i++) { const k = this.flat ? 1 : .9 + ((i * 7919) % 13) / 60; col[i * 3] = c.r * k; col[i * 3 + 1] = c.g * k; col[i * 3 + 2] = c.b * k; }
     g.setAttribute('color', new T.BufferAttribute(col, 3)); this.list.push(g); return this;
   }
   addPre(geo, x, y, z, rx, ry, rz) { // junta uma peça que já tem cores próprias
@@ -1639,66 +1639,115 @@ function animAnimal(a) {
 
 // ================================================================ VEÍCULOS (dirigíveis, com peças e gasolina)
 const vehicles = [], pumps = [];
-const carTex = canvasTex(128, (g, s) => { g.fillStyle = '#f4f4f4'; g.fillRect(0, 0, s, s); for (let i = 0; i < 160; i++) { const v = 160 + rnd8() * 80; g.fillStyle = `rgba(${v * .9},${v * .8},${v * .6},${.05 + rnd8() * .08})`; g.beginPath(); g.ellipse(rnd8() * s, rnd8() * s, 2 + rnd8() * 8, 1 + rnd8() * 4, rnd8() * 3, 0, 7); g.fill(); } }); // poeira leve
-const carMat = new T.MeshLambertMaterial({ vertexColors: true, map: carTex });
+const carMat = new T.MeshPhongMaterial({ vertexColors: true, shininess: 70, specular: 0x3a3a3a }); // pintura limpa com brilho
+const wheelMat = new T.MeshLambertMaterial({ vertexColors: true });
 const VT = { // tipos: comprimento, largura, velocidade máx (m/s), nome
   sedan: { L: 4.4, W: 1.8, max: 17, n: 'Sedã' }, taxi: { L: 4.4, W: 1.8, max: 17, n: 'Táxi' }, policia: { L: 4.5, W: 1.85, max: 20, n: 'Viatura' },
   pickup: { L: 4.8, W: 1.9, max: 15, n: 'Picape' }, limo: { L: 6.4, W: 1.9, max: 14, n: 'Limusine' }, van: { L: 4.9, W: 2.0, max: 13, n: 'Van' },
   ambulancia: { L: 5.4, W: 2.1, max: 15, n: 'Ambulância' }, caminhao: { L: 6.2, W: 2.2, max: 11, n: 'Caminhãozinho' }, bombeiros: { L: 7.2, W: 2.4, max: 11, n: 'Caminhão de bombeiros' },
 };
-const extrudeSide = (pts, W) => { const sh = new T.Shape(); pts.forEach((p, i) => i ? sh.lineTo(p[0], p[1]) : sh.moveTo(p[0], p[1])); sh.closePath(); const g = new T.ExtrudeGeometry(sh, { depth: W, bevelEnabled: true, bevelThickness: .04, bevelSize: .04, bevelSegments: 2 }); g.translate(0, 0, -W / 2); return g; };
+const extrudeSide = (pts, W, bev) => { const sh = new T.Shape(); pts.forEach((p, i) => i ? sh.lineTo(p[0], p[1]) : sh.moveTo(p[0], p[1])); sh.closePath(); const b = bev == null ? .05 : bev; const g = new T.ExtrudeGeometry(sh, { depth: W, bevelEnabled: b > 0, bevelThickness: b, bevelSize: b, bevelSegments: 3 }); g.translate(0, 0, -W / 2); return g; };
+const archG = new T.CylinderGeometry(.5, .5, 1, 14, 1, false, -PI / 2, PI); // meia roda: caixa de roda
 const vGeoCache = {};
+const wheelAxles = (type) => { const t = VT[type], h = t.L / 2, big = type === 'caminhao' || type === 'bombeiros'; return { r: big ? .46 : .36, ax: type === 'limo' ? [h - .85, -h + .85] : big ? [h - .9, -h + 1.1] : [h - .85, -h + .8] }; };
 function vehicleGeo(type, color) {
   const key = type + color; if (vGeoCache[key]) return vGeoCache[key];
-  const t = VT[type], L = t.L, W = t.W, h = L / 2, P2 = new Part(), glass = 0x1e2a36, chrome = 0xc8ccd0, dark = 0x1c1c1e;
-  const lights = (fy, zf) => { for (const e of [-1, 1]) { P2.add(boxG, 0xfff4c0, h + .02, fy, e * W * .32, 0, 0, 0, .05, .14, .32); P2.add(boxG, 0xb02020, -h - .02, fy, e * W * .34, 0, 0, 0, .05, .13, .3); } };
-  const bumpers = (y) => { P2.add(boxG, chrome, h + .04, y, 0, 0, 0, 0, .12, .12, W * .96); P2.add(boxG, chrome, -h - .04, y, 0, 0, 0, 0, .12, .12, W * .96); };
+  const t = VT[type], L = t.L, W = t.W, h = L / 2, P2 = new Part(); P2.flat = true;
+  const glass = 0x26323e, chrome = 0xc4c8cc, dark = 0x1a1b1d, plastic = 0x2c2d30, side = W / 2 + .05;
+  const dk = (c, f) => new T.Color(c).multiplyScalar(f).getHex(), seam = dk(color, .62);
+  const seg = (x1, y1, x2, y2, z, th, wd, col) => { const dx = x2 - x1, dy = y2 - y1; P2.add(boxG, col, (x1 + x2) / 2, (y1 + y2) / 2, z, 0, 0, Math.atan2(dy, dx), Math.hypot(dx, dy) + .02, th, wd); };
+  const { r, ax } = wheelAxles(type);
+  // cabine de vidro com teto e colunas na cor do carro (vidros visíveis de cima e de lado)
+  const house = (x1, x2, x3, x4, yb, yt, Wg, bPil) => {
+    P2.add(extrudeSide([[x1, yb], [x2, yt], [x3, yt], [x4, yb]], Wg, .03), glass);
+    P2.add(boxG, color, (x2 + x3) / 2, yt + .03, 0, 0, 0, 0, x2 - x3 + .1, .07, Wg + .1);
+    for (const e of [-1, 1]) {
+      const z = e * (Wg / 2 + .04);
+      seg(x1, yb, x2, yt, z, .1, .06, color); seg(x4, yb, x3, yt, z, .16, .06, color);
+      for (const bx of bPil) P2.add(boxG, color, bx, (yb + yt) / 2, z, 0, 0, 0, .1, yt - yb, .06);
+      P2.add(boxG, color, x1 - .12, yb + .1, e * (Wg / 2 + .22), 0, 0, 0, .1, .1, .16); // retrovisor
+      P2.add(boxG, dark, x1 - .12, yb + .1, e * (Wg / 2 + .3), 0, 0, 0, .06, .08, .02);
+    }
+    seg(x1, yb, x2, yt, 0, .03, Wg + .02, dk(color, .8)); // friso do para-brisa
+  };
+  const arches = (y0) => { for (const x of ax) for (const e of [-1, 1]) P2.add(archG, dark, x, y0 == null ? r : y0, e * side, -PI / 2, 0, 0, r * 2.35, .02, r * 2.35); };
+  const doors = (xs, y0, y1, handles) => { for (const e of [-1, 1]) { for (const x of xs) P2.add(boxG, seam, x, (y0 + y1) / 2, e * side, 0, 0, 0, .025, y1 - y0, .012); for (const x of handles) P2.add(boxG, chrome, x, y1 - .1, e * (side + .01), 0, 0, 0, .16, .035, .02); } };
+  const front = (y, wl) => { // faróis, grade e placas
+    for (const e of [-1, 1]) {
+      P2.add(boxG, plastic, h + .04, y, e * W * .32, 0, 0, 0, .05, .2, .38); P2.add(boxG, 0xfff6d8, h + .065, y, e * W * .32, 0, 0, 0, .02, .14, .3);
+      P2.add(boxG, 0xf0a020, h + .06, y - .14, e * W * .4, 0, 0, 0, .02, .05, .12); // pisca
+      P2.add(boxG, 0x8a1010, -h - .04, y, e * W * .35, 0, 0, 0, .05, .18, .3); P2.add(boxG, 0xe03030, -h - .065, y, e * W * .35, 0, 0, 0, .02, .13, .24);
+    }
+    P2.add(boxG, plastic, h + .04, y, 0, 0, 0, 0, .04, .18, wl || W * .4);
+    for (let i = 0; i < 3; i++) P2.add(boxG, 0x55585c, h + .065, y - .05 + i * .05, 0, 0, 0, 0, .01, .015, (wl || W * .4) - .06);
+    for (const s of [1, -1]) { P2.add(boxG, 0xeeeee6, s * (h + .1), y - .26, 0, 0, 0, 0, .02, .13, .4); P2.add(boxG, 0x30343a, s * (h + .112), y - .26, 0, 0, 0, 0, .005, .05, .28); }
+  };
+  const bumpers = (y) => { for (const s of [1, -1]) { P2.add(boxG, plastic, s * (h + .05), y, 0, 0, 0, 0, .14, .16, W + .04); P2.add(boxG, chrome, s * (h + .125), y + .03, 0, 0, 0, 0, .01, .03, W * .9); } };
+  const skirt = (y, len) => { for (const e of [-1, 1]) P2.add(boxG, plastic, 0, y, e * (side - .01), 0, 0, 0, len, .1, .02); };
   if (type === 'van' || type === 'ambulancia') {
-    P2.add(extrudeSide([[-h, .32], [h, .32], [h + .05, .8], [h - .25, 1.08], [h - .9, 1.9], [-h, 1.95]], W), color);
-    P2.add(extrudeSide([[h - .28, 1.1], [h - .88, 1.82], [h - 1.1, 1.82], [h - 1.1, 1.1]], W + .02), glass);
-    for (const e of [-1, 1]) for (const x of [.4, -.6, -1.6]) if (x < h - 1.3) P2.add(boxG, glass, x, 1.45, e * (W / 2 + .03), 0, 0, 0, .8, .45, .02);
-    if (type === 'ambulancia') { for (const e of [-1, 1]) { P2.add(boxG, 0xc02020, 0, 1.0, e * (W / 2 + .03), 0, 0, 0, L * .9, .16, .02); P2.add(boxG, 0xc02020, -.6, 1.5, e * (W / 2 + .035), 0, 0, 0, .14, .5, .02); P2.add(boxG, 0xc02020, -.6, 1.5, e * (W / 2 + .035), 0, 0, 0, .5, .14, .02); } P2.add(boxG, 0xd02020, h - 1.2, 2.02, 0, 0, 0, 0, .25, .12, W * .7); }
-    lights(.7); bumpers(.42);
+    P2.add(extrudeSide([[-h, .3], [h, .3], [h + .05, .82], [h - .2, 1.08], [h - .9, 1.9], [-h, 1.95]], W), color);
+    P2.add(extrudeSide([[h - .2, 1.12], [h - .82, 1.86], [h - .95, 1.86], [h - .3, 1.1]], W - .3, .03), glass); // para-brisa
+    for (const e of [-1, 1]) {
+      P2.add(boxG, glass, h - .95, 1.45, e * side, 0, 0, 0, .7, .5, .02); // janela da porta
+      for (const x of [.25, -.75, -1.7]) if (x < h - 1.45 && x > -h + .45 && type === 'van') P2.add(boxG, glass, x, 1.48, e * side, 0, 0, 0, .8, .44, .02);
+    }
+    P2.add(boxG, glass, -h - .045, 1.5, 0, 0, 0, 0, .02, .48, W * .32 * 2); P2.add(boxG, seam, -h - .05, 1.15, 0, 0, 0, 0, .012, 1.5, .025); // vidro e vão da porta traseira
+    P2.add(boxG, dk(color, .85), -.2, 1.97, 0, 0, 0, 0, L - 1.4, .05, W - .2); // teto
+    doors([h - .6, h - 1.35, -h + .15], .45, 1.85, [h - 1.25, h - 1.5]);
+    if (type === 'ambulancia') { for (const e of [-1, 1]) { P2.add(boxG, 0xc02020, -.2, .95, e * (side + .005), 0, 0, 0, L * .88, .16, .012); P2.add(boxG, 0xc02020, -.9, 1.5, e * (side + .006), 0, 0, 0, .14, .5, .012); P2.add(boxG, 0xc02020, -.9, 1.5, e * (side + .006), 0, 0, 0, .5, .14, .012); } P2.add(boxG, plastic, h - 1.2, 2.03, 0, 0, 0, 0, .3, .08, W * .72); for (const e of [-1, 1]) P2.add(boxG, 0xe02020, h - 1.2, 2.11, e * W * .2, 0, 0, 0, .26, .1, W * .3); }
+    front(.7); bumpers(.4); arches(); skirt(.36, L * .5);
   } else if (type === 'caminhao' || type === 'bombeiros') {
-    const cab = 1.9, bx = -h + (L - cab) / 2;
-    P2.add(extrudeSide([[h - cab, .45], [h, .45], [h + .05, .95], [h - .2, 1.2], [h - .55, 2.1], [h - cab, 2.15]], W), color);
-    P2.add(extrudeSide([[h - .23, 1.22], [h - .56, 2.0], [h - .9, 2.0], [h - .9, 1.22]], W + .02), glass);
-    P2.add(boxG, type === 'bombeiros' ? color : 0xd8d4c8, bx, 1.45, 0, 0, 0, 0, L - cab - .1, 2.0, W);
-    P2.add(boxG, dark, 0, .48, 0, 0, 0, 0, L - .2, .2, W * .7); // chassi
-    if (type === 'bombeiros') { for (const e of [-1, 1]) for (let i = 0; i < 3; i++) P2.add(boxG, 0xd8d8d8, bx - L * .25 + i * .9, 1.4, e * (W / 2 + .02), 0, 0, 0, .7, .9, .02); P2.add(boxG, 0xc8c8c8, bx, 2.55, 0, 0, 0, 0, L - cab - .3, .08, .5); for (let i = 0; i < 8; i++) P2.add(boxG, 0xa8a8a8, bx - (L - cab) / 2 + .3 + i * .55, 2.6, 0, 0, 0, 0, .05, .05, .5); P2.add(boxG, 0x2050d0, h - .9, 2.2, 0, 0, 0, 0, .25, .12, W * .7); P2.add(boxG, 0xffffff, bx, 1.0, W / 2 + .02, 0, 0, 0, L - cab - .2, .1, .02); }
-    else { P2.add(boxG, 0x8a8478, bx - (L - cab) / 2 + .02, 1.45, 0, 0, 0, 0, .04, 1.9, W * .95); }
-    lights(.8); bumpers(.52);
+    const cab = 1.9, bx = -h + (L - cab) / 2, bl = L - cab - .1;
+    P2.add(extrudeSide([[h - cab, .45], [h, .45], [h + .05, .95], [h - .15, 1.2], [h - .5, 2.1], [h - cab, 2.15]], W), color);
+    P2.add(extrudeSide([[h - .14, 1.24], [h - .46, 2.04], [h - .6, 2.04], [h - .26, 1.22]], W - .3, .03), glass);
+    for (const e of [-1, 1]) { P2.add(boxG, glass, h - 1.05, 1.68, e * side, 0, 0, 0, .75, .5, .02); P2.add(boxG, plastic, h - .4, 1.7, e * (side + .2), 0, 0, 0, .06, .4, .1); }
+    doors([h - .55, h - 1.55], .6, 2.05, [h - 1.4]);
+    if (type === 'bombeiros') {
+      P2.add(extrudeSide([[bx - bl / 2, .55], [bx + bl / 2, .55], [bx + bl / 2, 2.35], [bx - bl / 2, 2.35]], W), color);
+      for (const e of [-1, 1]) { for (let i = 0; i < 3; i++) P2.add(boxG, 0xbfc3c7, bx - bl * .32 + i * (bl * .32), 1.45, e * side, 0, 0, 0, bl * .28, 1.1, .02); P2.add(boxG, 0xf2f2ea, bx, .78, e * (side + .005), 0, 0, 0, bl, .1, .012); P2.add(boxG, 0xf2f2ea, h - cab / 2, .78, e * (side + .005), 0, 0, 0, cab - .2, .1, .012); }
+      P2.add(boxG, 0xb8bcc0, bx, 2.48, 0, 0, 0, 0, bl - .3, .07, .5); for (let i = 0; i < 9; i++) P2.add(boxG, 0x9a9ea2, bx - bl / 2 + .35 + i * (bl - .7) / 8, 2.53, 0, 0, 0, 0, .05, .05, .5); for (const e of [-1, 1]) P2.add(boxG, 0x9a9ea2, bx, 2.53, e * .25, 0, 0, 0, bl - .3, .05, .05);
+      P2.add(boxG, plastic, h - .9, 2.19, 0, 0, 0, 0, .3, .08, W * .7); for (const e of [-1, 1]) P2.add(boxG, e < 0 ? 0xe02020 : 0x2a5ae0, h - .9, 2.27, e * W * .18, 0, 0, 0, .26, .1, W * .3);
+    } else {
+      P2.add(extrudeSide([[bx - bl / 2, .62], [bx + bl / 2, .62], [bx + bl / 2, 2.5], [bx - bl / 2, 2.5]], W, .03), 0xe6e2d8); // baú
+      for (const e of [-1, 1]) for (let i = 1; i < 6; i++) P2.add(boxG, 0xc8c4ba, bx - bl / 2 + i * bl / 6, 1.56, e * (W / 2 + .035), 0, 0, 0, .04, 1.8, .012);
+      P2.add(boxG, 0xc8c4ba, -h - .02, 1.56, 0, 0, 0, 0, .02, 1.8, .02); for (const e of [-1, 1]) P2.add(boxG, 0x8a8a8a, -h - .03, 1.56, e * .3, 0, 0, 0, .02, 1.6, .03);
+    }
+    P2.add(boxG, dark, 0, .5, 0, 0, 0, 0, L - .2, .22, W * .7); // chassi
+    front(.82, W * .55); bumpers(.5); arches();
   } else if (type === 'pickup') {
-    P2.add(extrudeSide([[-h, .32], [h, .32], [h + .05, .62], [h - .1, .86], [h - 1.15, .95], [h - 1.15, .98], [-h, .98], [-h - .05, .6]], W), color);
-    P2.add(extrudeSide([[h - 1.15, .95], [h - 1.7, 1.45], [h - 2.45, 1.47], [h - 2.55, .95]], W - .06), color);
-    P2.add(extrudeSide([[h - 1.2, .98], [h - 1.68, 1.4], [h - 2.4, 1.42], [h - 2.5, .98]], W - .02), glass);
-    P2.add(boxG, 0x2a2a2a, -h + 1.0, .92, 0, 0, 0, 0, 1.9, .08, W - .25); // caçamba
-    for (const e of [-1, 1]) P2.add(boxG, chrome, -h + 1.0, 1.08, e * (W / 2 - .02), 0, 0, 0, 1.9, .05, .05);
-    lights(.68); bumpers(.42);
-  } else { // sedã, táxi, viatura, limusine (estilo anos 80)
-    const s2 = type === 'limo' ? 1.0 : 0;
-    P2.add(extrudeSide([[-h, .3], [h, .3], [h + .05, .58], [h - .05, .8], [h - 1.15, .9], [-h + 1.05, .92], [-h, .86], [-h - .05, .58]], W), color);
-    P2.add(extrudeSide([[h - 1.15, .9], [h - 1.7 - s2 * .1, 1.36], [-h + 1.65, 1.38], [-h + 1.05, .92]], W - .1), color);
-    P2.add(extrudeSide([[h - 1.2, .92], [h - 1.7, 1.31], [-h + 1.63, 1.33], [-h + 1.1, .94]], W - .06), glass);
-    for (const e of [-1, 1]) { const n = type === 'limo' ? 4 : 2; for (let i = 1; i < n; i++) P2.add(boxG, color, lerp(h - 1.6, -h + 1.55, i / n), 1.12, e * (W / 2 - .03), 0, 0, 0, .1, .4, .04); P2.add(boxG, chrome, 0, .62, e * (W / 2 + .03), 0, 0, 0, L * .82, .04, .02); }
-    P2.add(boxG, 0x2a2a2a, h + .03, .55, 0, 0, 0, 0, .04, .18, W * .5); // grade
-    if (type === 'taxi') { P2.add(boxG, 0xf0f0e8, -.2, 1.47, 0, 0, 0, 0, .55, .18, .3); for (const e of [-1, 1]) for (let i = 0; i < 8; i++) P2.add(boxG, i % 2 ? 0x111111 : 0xf0f0e8, -1.2 + i * .3, .72, e * (W / 2 + .035), 0, 0, 0, .3, .1, .02); }
-    if (type === 'policia') { for (const e of [-1, 1]) { P2.add(boxG, 0xf0f0f0, -.2, .72, e * (W / 2 + .035), 0, 0, 0, 2.0, .38, .02); P2.add(boxG, 0x1a1a1a, -.2, .72, e * (W / 2 + .04), 0, 0, 0, .6, .12, .02); } P2.add(boxG, 0x2a2a2a, -.25, 1.42, 0, 0, 0, 0, .3, .07, 1.2); P2.add(boxG, 0xd02020, -.25, 1.48, -.35, 0, 0, 0, .25, .1, .45); P2.add(boxG, 0x2040e0, -.25, 1.48, .35, 0, 0, 0, .25, .1, .45); }
-    lights(.62); bumpers(.4);
+    P2.add(extrudeSide([[-h, .32], [h, .32], [h + .05, .62], [h - .1, .86], [h - 1.15, .96], [h - 2.6, .98], [-h, .98], [-h - .05, .6]], W), color);
+    house(h - 1.15, h - 1.68, h - 2.42, h - 2.58, .96, 1.46, W - .22, [h - 2.05]);
+    P2.add(boxG, dark, -h + 1.0, 1.0, 0, 0, 0, 0, 1.95, .02, W - .3); // caçamba
+    for (const e of [-1, 1]) P2.add(boxG, color, -h + 1.0, 1.05, e * (W / 2 - .07), 0, 0, 0, 1.95, .12, .14);
+    P2.add(boxG, color, -h + .08, 1.05, 0, 0, 0, 0, .14, .12, W - .1); P2.add(boxG, dk(color, .9), h - 2.62, 1.12, 0, 0, 0, 0, .1, .2, W - .1);
+    doors([h - 1.2, h - 2.55], .42, .92, [h - 2.35]);
+    front(.66); bumpers(.42); arches(); skirt(.36, L * .38);
+  } else { // sedã, táxi, viatura, limusine
+    const limo = type === 'limo', x1 = h - 1.15, x4 = -h + 1.0, x2 = h - 1.72, x3 = -h + 1.55, yt = 1.36;
+    P2.add(extrudeSide([[-h, .3], [h, .3], [h + .05, .58], [h - .05, .8], [x1, .9], [x4, .92], [-h, .86], [-h - .05, .58]], W), color);
+    const bp = []; const n = limo ? 4 : 2; for (let i = 1; i < n; i++) bp.push(lerp(x2, x3, i / n));
+    house(x1, x2, x3, x4, .9, yt, W - .26, bp);
+    const ds = [x1 + .05]; for (const b of bp) ds.push(b); ds.push(x4 + .2);
+    doors(ds, .42, .86, bp.map(b => b + .2).concat([x2 + .05]));
+    P2.add(boxG, dk(color, .85), h - .58, .83, 0, 0, 0, Math.atan2(.1, 1.1) * 0, .9, .015, W * .55); // vinco do capô
+    for (const e of [-1, 1]) P2.add(boxG, chrome, 0, .62, e * (side + .005), 0, 0, 0, L * .82, .03, .012);
+    if (type === 'taxi') { P2.add(boxG, 0xf4f4ea, -.1, yt + .15, 0, 0, 0, 0, .5, .18, .32); P2.add(boxG, 0x222222, -.1, yt + .15, 0, 0, 0, 0, .3, .08, .33); for (const e of [-1, 1]) for (let i = 0; i < 10; i++) P2.add(boxG, i % 2 ? 0x141414 : 0xf4f4ea, -1.35 + i * .27, .72, e * (side + .006), 0, 0, 0, .27, .09, .012); }
+    if (type === 'policia') { for (const e of [-1, 1]) { P2.add(boxG, 0xf2f2f2, -.15, .64, e * (side + .006), 0, 0, 0, 2.3, .4, .012); P2.add(boxG, 0x1a1a1a, -.15, .66, e * (side + .009), 0, 0, 0, .7, .1, .012); } P2.add(boxG, plastic, -.1, yt + .1, 0, 0, 0, 0, .3, .07, 1.2); P2.add(boxG, 0xe02020, -.1, yt + .17, -.33, 0, 0, 0, .26, .09, .5); P2.add(boxG, 0x2a5ae0, -.1, yt + .17, .33, 0, 0, 0, .26, .09, .5); }
+    front(.62); bumpers(.4); arches(); skirt(.36, L * .45);
   }
   return (vGeoCache[key] = P2.build());
 }
 const wGeoCache = {};
 function wheelGeo(type, flat) {
   const key = type + flat; if (wGeoCache[key]) return wGeoCache[key];
-  const t = VT[type], h = t.L / 2, W = t.W, big = type === 'caminhao' || type === 'bombeiros', r = big ? .46 : .36, P2 = new Part();
-  const ax = type === 'limo' ? [h - .85, -h + .85] : big ? [h - .9, -h + 1.1] : [h - .85, -h + .8];
+  const t = VT[type], W = t.W, { r, ax } = wheelAxles(type), P2 = new Part(); P2.flat = true;
   let i = 0;
   for (const x of ax) for (const e of [-1, 1]) {
-    const f = i++ === flat, rr3 = f ? r * .78 : r;
-    P2.add(cylG, 0x161616, x, rr3, e * (W / 2 - .12), PI / 2, 0, 0, rr3 * 2, .26, rr3 * 2);
-    P2.add(cylG, 0xb8bcc0, x, rr3, e * (W / 2 - .02), PI / 2, 0, 0, rr3 * 1.1, .06, rr3 * 1.1);
-    P2.add(cylG, 0x6a6e72, x, rr3, e * (W / 2 + .01), PI / 2, 0, 0, rr3 * .4, .04, rr3 * .4);
+    const f = i++ === flat, rr3 = f ? r * .78 : r, z = e * (W / 2 - .12);
+    P2.add(cylG, 0x181818, x, rr3, z, PI / 2, 0, 0, rr3 * 2, .26, rr3 * 2); // pneu
+    P2.add(cylG, 0x2a2a2a, x, rr3, z + e * .135, PI / 2, 0, 0, rr3 * 1.7, .01, rr3 * 1.7); // flanco
+    P2.add(cylG, 0xc0c4c8, x, rr3, z + e * .14, PI / 2, 0, 0, rr3 * 1.15, .03, rr3 * 1.15); // aro
+    P2.add(cylG, 0x5a5e62, x, rr3, z + e * .16, PI / 2, 0, 0, rr3 * .38, .03, rr3 * .38); // cubo
   }
   return (wGeoCache[key] = P2.build());
 }
@@ -1720,7 +1769,7 @@ function makeCar(x, z, v, cc, nome, loot, big) {
   return veh;
 }
 function buildVehicle(veh, parent) {
-  const g = new T.Group(), body = new T.Mesh(vehicleGeo(veh.type, veh.color), carMat), wh = new T.Mesh(wheelGeo(veh.type, veh.st.pneu), carMat);
+  const g = new T.Group(), body = new T.Mesh(vehicleGeo(veh.type, veh.color), carMat), wh = new T.Mesh(wheelGeo(veh.type, veh.st.pneu), wheelMat);
   if (SHADOWS) { body.castShadow = wh.castShadow = true; }
   g.add(body, wh); g.position.set(veh.x, 0, veh.z); g.rotation.y = veh.rot - PI / 2; parent.add(g); veh.g = g; veh.wh = wh;
   veh.cont = { nome: veh.nome + ': porta-malas', x: veh.x, z: veh.z, hx: .1, hz: .1, items: veh.items, veh, isTrunk: true, ch: veh.ch };
