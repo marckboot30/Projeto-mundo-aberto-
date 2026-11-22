@@ -81,6 +81,7 @@ class MainActivity : Activity() {
     private lateinit var swDuck: Switch
     private lateinit var swSub: Switch
     private lateinit var swBubble: Switch
+    private lateinit var swAuto: Switch
 
     private var tts: TextToSpeech? = null
     private var voices: List<Voice> = emptyList()
@@ -238,6 +239,8 @@ class MainActivity : Activity() {
         swSub = switch("Mostrar legenda traduzida", prefs.getBoolean("showSub", true))
         swBubble = switch("Bolinha flutuante (pausar/desligar)", prefs.getBoolean("bubble", true))
         swDuck = switch("Abaixar o vídeo quando a tradução falar", prefs.getBoolean("duck", true))
+        swAuto = switch("⏸ Pausar junto quando o vídeo pausar", prefs.getBoolean("autoPause", true))
+        cScreen.addView(swAuto)
         cScreen.addView(swSub)
         cScreen.addView(swBubble)
         cScreen.addView(swDuck)
@@ -414,6 +417,7 @@ class MainActivity : Activity() {
             .putBoolean("showSub", swSub.isChecked)
             .putBoolean("bubble", swBubble.isChecked)
             .putBoolean("duck", swDuck.isChecked)
+            .putBoolean("autoPause", swAuto.isChecked)
             .apply()
         if ((swSub.isChecked || swBubble.isChecked) && !Settings.canDrawOverlays(this)) {
             setStatus(false, "Permita \"Sobrepor a outros apps\" e toque em COMEÇAR de novo")
@@ -460,6 +464,7 @@ class MainActivity : Activity() {
             putExtra("showSub", swSub.isChecked)
             putExtra("bubble", swBubble.isChecked)
             putExtra("duck", swDuck.isChecked)
+            putExtra("autoPause", swAuto.isChecked)
         }
         startForegroundService(i)
         setStatus(true, "Rodando — abra seu vídeo")

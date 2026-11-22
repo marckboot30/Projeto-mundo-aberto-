@@ -86,6 +86,13 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private var speed = 1.25f
     private var duck = true
     private var pitch = 1.0f
+    // pausa automática quando o vídeo pausa (a imagem para de mudar)
+    private var autoPause = true
+    @Volatile private var videoPaused = false
+    @Volatile private var lastChangeAt = 0L
+    private val changeTimes = ArrayDeque<Long>()
+    private var prevSig: IntArray? = null
+    private val sigPixels = IntArray(32 * 18)
     private var voiceMode = "sistema"   // sistema | ia_m | ia_f | auto
     private var neural: NeuralSpeaker? = null
     private var detector: SpeakerDetector? = null
@@ -145,6 +152,10 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         pitch = intent.getFloatExtra("pitch", 1.0f)
         voiceName = intent.getStringExtra("voice") ?: ""
         voiceMode = intent.getStringExtra("voiceMode") ?: "sistema"
+        autoPause = intent.getBooleanExtra("autoPause", true)
+        videoPaused = false
+        prevSig = null
+        lastChangeAt = android.os.SystemClock.elapsedRealtime()
         setupVoices()
         if (ttsReady) applyVoiceSettings()
         val showBubble = intent.getBooleanExtra("bubble", true)
@@ -260,7 +271,9 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
                 checkRotation()
                 grab()
             } catch (_: Exception) { null }
-            if (crop == null) { next(80); return }
+            checkVideoState()
+            if (crop == null) { next(60); return }
+            if (videoPaused) { crop.recycle(); next(100); return }
             recognizer.process(InputImage.fromBitmap(crop, 0))
                 .addOnSuccessListener(mainExec) { result ->
                     val lines = result.textBlocks
@@ -287,11 +300,70 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             val top = (img.height * (1f - area)).roundToInt().coerceIn(0, img.height - 1)
             val crop = Bitmap.createBitmap(full, 0, top, img.width, img.height - top)
             feedDetector(full)
+            trackChanges(full)
             if (crop !== full) full.recycle()
             return crop
         } finally {
             img.close()
         }
+    }
+
+    // ---------- Vídeo pausado? (thread de captura) ----------
+
+    // "impressão digital" bem pequena da tela para ver se ela mudou
+    private fun trackChanges(full: Bitmap) {
+        val tiny = Bitmap.createScaledBitmap(full, 32, 18, false)
+        tiny.getPixels(sigPixels, 0, 32, 0, 0, 32, 18)
+        if (tiny !== full) tiny.recycle()
+        val sig = IntArray(sigPixels.size) { i ->
+            val p = sigPixels[i]
+            (((p shr 16) and 0xFF) * 3 + ((p shr 8) and 0xFF) * 6 + (p and 0xFF)) / 10
+        }
+        val prev = prevSig
+        prevSig = sig
+        if (prev == null) return
+        var diff = 0L
+        for (i in sig.indices) diff += kotlin.math.abs(sig[i] - prev[i])
+        val mean = diff.toFloat() / sig.size
+        if (mean > 1.2f) {
+            val now = android.os.SystemClock.elapsedRealtime()
+            lastChangeAt = now
+            changeTimes.addLast(now)
+            while (changeTimes.size > 6) changeTimes.removeFirst()
+        }
+    }
+
+    private fun checkVideoState() {
+        if (!autoPause) return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (!videoPaused && now - lastChangeAt > 1200) {
+            videoPaused = true
+            main.post { onVideoPaused() }
+        } else if (videoPaused) {
+            // volta só se a tela mudou pelo menos 2 vezes no último meio segundo (vídeo rodando)
+            val recent = changeTimes.count { now - it < 600 }
+            if (recent >= 2) {
+                videoPaused = false
+                main.post { onVideoResumed() }
+            }
+        }
+    }
+
+    private fun onVideoPaused() {
+        if (!videoPaused) return
+        neural?.stopAll()
+        tts?.stop()
+        speakingCount = 0
+        gen++ // descarta traduções que ainda estavam chegando
+        candidate = ""; candidateTr = null
+        overlay?.setPaused(true)
+        updateNotif("⏸ Vídeo pausado — o tradutor pausou junto")
+    }
+
+    private fun onVideoResumed() {
+        if (videoPaused) return
+        overlay?.setPaused(paused)
+        updateNotif("Lendo legendas…")
     }
 
     // Manda uma cópia pequena da tela para o detector de rosto (umas 3 vezes por segundo)
@@ -347,7 +419,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     // ---------- Decide quando falar (thread principal) ----------
 
     private fun onText(text: String) {
-        if (paused) return
+        if (paused || videoPaused) return
         if (text.isEmpty()) {
             candidate = ""; candidateTr = null; candidateConfirmed = false
             return
@@ -373,7 +445,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         if (toTranslate.isEmpty()) return
 
         translator?.translate(toTranslate)?.addOnSuccessListener { tr ->
-            if (myGen != gen || paused) return@addOnSuccessListener
+            if (myGen != gen || paused || videoPaused) return@addOnSuccessListener
             candidateTr = tr
             candidateConfirmed = true
             deliver(candidate, tr)
@@ -504,6 +576,8 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             updateNotif("Pausado — toque na bolinha para continuar")
         } else {
             resetState()
+            videoPaused = false
+            lastChangeAt = android.os.SystemClock.elapsedRealtime()
             updateNotif("Lendo legendas…")
         }
     }
