@@ -21,6 +21,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.AdapterView
+import android.widget.EditText
 import android.widget.ArrayAdapter
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -66,6 +67,7 @@ class MainActivity : Activity() {
     private val dlRows = HashMap<VoiceKind, TextView>()
     private val dlBtns = HashMap<VoiceKind, TextView>()
     private var neuralTest: NeuralSpeaker? = null
+    private lateinit var fixList: LinearLayout
     private val modes = listOf(
         "🤖  IA masculina (Miro)" to "ia_m",
         "🤖  IA feminina (Dii)" to "ia_f",
@@ -243,6 +245,35 @@ class MainActivity : Activity() {
         cScreen.addView(swDuck)
         root.addView(cScreen)
 
+        // ---------- Card: correções ----------
+        val cFix = cardView("📖  Correções de tradução")
+        cFix.addView(txt(
+            "Se uma palavra sair traduzida errado, cadastre aqui que o app troca sozinho.\nEx.: \"cara\" → \"mano\"",
+            13f, muted
+        ).apply { setLineSpacing(0f, 1.2f) })
+        val inWrong = edit("Sai assim (errado)")
+        val inRight = edit("Trocar por (certo)")
+        cFix.addView(inWrong, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(10) })
+        cFix.addView(inRight, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)).apply { topMargin = dp(8) })
+        cFix.addView(
+            bigButton("➕  Adicionar correção", solid = false, color = green) {
+                val w = inWrong.text.toString().trim()
+                val c = inRight.text.toString().trim()
+                if (w.isNotEmpty()) {
+                    val list = TextFixer.loadCorrections(this).filter { !it.first.equals(w, true) } + (w to c)
+                    TextFixer.saveCorrections(this, list)
+                    inWrong.setText(""); inRight.setText("")
+                    renderFixes()
+                    setStatus(false, "Correção salva (vale na próxima vez que tocar em COMEÇAR)")
+                }
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(10) }
+        )
+        fixList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, 0) }
+        cFix.addView(fixList)
+        renderFixes()
+        root.addView(cFix)
+
         // ---------- Botões ----------
         root.addView(
             bigButton("▶   COMEÇAR", solid = true, color = green) { askCapture() },
@@ -331,6 +362,38 @@ class MainActivity : Activity() {
             }
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
+    }
+
+    private fun renderFixes() {
+        fixList.removeAllViews()
+        val list = TextFixer.loadCorrections(this)
+        for (pair in list) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.setPadding(0, dp(4), 0, dp(4))
+            val label = "\"${pair.first}\"  →  \"${pair.second.ifEmpty { "(apagar)" }}\""
+            row.addView(txt(label, 14.5f, fg), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val del = chip("✕") {
+                TextFixer.saveCorrections(this, TextFixer.loadCorrections(this).filter { it.first != pair.first })
+                renderFixes()
+            }
+            del.setTextColor(red)
+            row.addView(del, LinearLayout.LayoutParams(dp(40), dp(34)))
+            fixList.addView(row)
+        }
+    }
+
+    private fun edit(hint: String): EditText {
+        val e = EditText(this)
+        e.hint = hint
+        e.setHintTextColor(muted)
+        e.setTextColor(fg)
+        e.textSize = 15f
+        e.isSingleLine = true
+        e.background = round(fieldC, 12)
+        e.setPadding(dp(12), 0, dp(12), 0)
+        return e
     }
 
     private val downloading = HashSet<VoiceKind>()

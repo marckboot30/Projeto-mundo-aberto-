@@ -86,6 +86,8 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private var speed = 1.25f
     private var duck = true
     private var pitch = 1.0f
+    private var srcLang = TranslateLanguage.ENGLISH
+    private var corrections: List<Pair<String, String>> = emptyList()
     private var voiceMode = "sistema"   // sistema | ia_m | ia_f | auto
     private var neural: NeuralSpeaker? = null
     private var detector: SpeakerDetector? = null
@@ -137,6 +139,8 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             return START_NOT_STICKY
         }
         val lang = intent.getStringExtra("lang") ?: TranslateLanguage.ENGLISH
+        srcLang = lang
+        corrections = TextFixer.loadCorrections(this)
         area = intent.getFloatExtra("area", 0.35f)
         speed = intent.getFloatExtra("speed", 1.25f)
         speakOn = intent.getBooleanExtra("speak", true)
@@ -372,8 +376,17 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         } else text
         if (toTranslate.isEmpty()) return
 
-        translator?.translate(toTranslate)?.addOnSuccessListener { tr ->
+        // limpa o texto e separa as falas antes de traduzir
+        val segments = TextFixer.cleanSource(toTranslate, srcLang)
+        if (segments.isEmpty()) return
+        val tr0 = translator ?: return
+        val tasks = segments.map { tr0.translate(it) }
+        com.google.android.gms.tasks.Tasks.whenAllSuccess<String>(tasks).addOnSuccessListener(mainExec) { list ->
             if (myGen != gen || paused) return@addOnSuccessListener
+            val joined = list.map { it.trim() }.filter { it.isNotEmpty() }
+                .joinToString(" ") { t -> if (list.size == 1 || t.last() in ".!?…") t else "$t." }
+            val tr = TextFixer.applyCorrections(joined, corrections)
+            if (tr.isEmpty()) return@addOnSuccessListener
             candidateTr = tr
             candidateConfirmed = true
             deliver(candidate, tr)
