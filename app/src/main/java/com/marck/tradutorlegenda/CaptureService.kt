@@ -90,7 +90,15 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
 
         createChannel()
         val notif = buildNotif("Preparando…")
-        if (Build.VERSION.SDK_INT >= 29) {
+        val micOk = intent.getBooleanExtra("genders", true) &&
+            checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (Build.VERSION.SDK_INT >= 30 && micOk) {
+            startForeground(
+                NOTIF_ID, notif,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            )
+        } else if (Build.VERSION.SDK_INT >= 29) {
             startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
             startForeground(NOTIF_ID, notif)
