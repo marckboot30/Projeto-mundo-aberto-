@@ -61,6 +61,12 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private var ttsReady = false
     @Volatile private var pending = 0
 
+    private var overlay: Overlay? = null
+    private var paused = false
+    private var speakOn = true
+    private var showSub = true
+    private var lastTranslation = ""
+
     private var area = 0.35f
     private var speed = 1.25f
     private var busy = false
@@ -98,6 +104,13 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         val lang = intent.getStringExtra("lang") ?: TranslateLanguage.ENGLISH
         area = intent.getFloatExtra("area", 0.35f)
         speed = intent.getFloatExtra("speed", 1.25f)
+        speakOn = intent.getBooleanExtra("speak", true)
+        showSub = intent.getBooleanExtra("showSub", true)
+        val showBubble = intent.getBooleanExtra("bubble", true)
+        paused = false
+        if (overlay == null) overlay = Overlay(this, onToggle = { togglePause() }, onStop = { stopSelf() })
+        if (showBubble) overlay?.showBubble()
+        overlay?.setPaused(false)
 
         val mpm = getSystemService(MediaProjectionManager::class.java)
         projection = mpm.getMediaProjection(code, data)
@@ -170,6 +183,10 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private val tick = object : Runnable {
         override fun run() {
             if (!running) return
+            if (paused) {
+                handler.postDelayed(this, INTERVAL_MS)
+                return
+            }
             try {
                 captureOnce()
             } catch (_: Exception) {
@@ -247,7 +264,22 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         return prev[b.length]
     }
 
+    private fun togglePause() {
+        paused = !paused
+        overlay?.setPaused(paused)
+        if (paused) {
+            tts?.stop()
+            pending = 0
+            updateNotif("Pausado — toque na bolinha para continuar")
+        } else {
+            lastSeen = ""
+            updateNotif("Lendo legendas…")
+        }
+    }
+
     private fun onText(text: String) {
+        // não lê a própria tradução se ela aparecer na captura
+        if (lastTranslation.isNotEmpty() && similar(text, lastTranslation)) return
         if (text.isEmpty()) {
             lastSeen = ""
             return
@@ -267,7 +299,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
 
     private fun translateAndSpeak(text: String) {
         translator?.translate(text)
-            ?.addOnSuccessListener { tr -> speak(tr) }
+            ?.addOnSuccessListener { tr -> if (!paused) deliver(tr) }
     }
 
     // ---------- Voz ----------
@@ -283,6 +315,13 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             override fun onError(utteranceId: String?) { pending = max(0, pending - 1) }
         })
         ttsReady = true
+    }
+
+    private fun deliver(text: String) {
+        if (text.isBlank()) return
+        lastTranslation = text
+        if (showSub) overlay?.showSubtitle(text)
+        if (speakOn) speak(text) else updateNotif(text)
     }
 
     private fun speak(text: String) {
@@ -351,6 +390,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
 
     override fun onDestroy() {
         stopCapture()
+        overlay?.removeAll(); overlay = null
         tts?.stop(); tts?.shutdown(); tts = null
         translator?.close(); translator = null
         recognizer.close()
