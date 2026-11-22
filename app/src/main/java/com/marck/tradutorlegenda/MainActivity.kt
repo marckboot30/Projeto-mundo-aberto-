@@ -51,6 +51,7 @@ class MainActivity : Activity() {
     private lateinit var swSpeak: Switch
     private lateinit var swSub: Switch
     private lateinit var swBubble: Switch
+    private lateinit var swGender: Switch
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -98,7 +99,8 @@ class MainActivity : Activity() {
         swSpeak = switch("🔊 Falar a tradução", "speak")
         swSub = switch("💬 Mostrar legenda traduzida na tela", "showSub")
         swBubble = switch("🎧 Botão flutuante por cima do vídeo", "bubble")
-        root.addView(swSpeak); root.addView(swSub); root.addView(swBubble)
+        swGender = switch("👨👩 Voz de homem ou mulher (ouve o vídeo)", "genders")
+        root.addView(swSpeak); root.addView(swSub); root.addView(swBubble); root.addView(swGender)
 
         val start = Button(this).apply {
             text = "▶  COMEÇAR"
@@ -126,6 +128,7 @@ class MainActivity : Activity() {
             "3. Abra o vídeo com legenda ligada (YouTube, Netflix etc.).\n" +
             "4. Baixe um pouco o volume do vídeo para ouvir a tradução.\n" +
             "5. Bolinha flutuante: toque = pausar/continuar, segure = desligar. Dá para arrastar.\n" +
+            "Voz de homem/mulher: o app ouve o tom da voz do vídeo. Se o app do vídeo bloquear o áudio, fala com a voz normal.\n" +
             "6. A legenda traduzida aparece em cima; arraste para onde quiser, toque para esconder.\n\n" +
             "Na 1ª vez ele baixa o idioma (uns 30 MB) — use Wi‑Fi.\n" +
             "Obs.: Netflix e alguns apps bloqueiam captura de tela; aí a tela fica preta e não funciona.",
@@ -149,7 +152,15 @@ class MainActivity : Activity() {
             .putBoolean("speak", swSpeak.isChecked)
             .putBoolean("showSub", swSub.isChecked)
             .putBoolean("bubble", swBubble.isChecked)
+            .putBoolean("genders", swGender.isChecked)
             .apply()
+        if (swGender.isChecked && Build.VERSION.SDK_INT >= 29 &&
+            checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED
+        ) {
+            status.text = "Permita o áudio (para saber se é homem ou mulher falando) e toque em COMEÇAR de novo."
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 8)
+            return
+        }
         if ((swSub.isChecked || swBubble.isChecked) && !Settings.canDrawOverlays(this)) {
             status.text = "Permita \"Sobrepor a outros apps\" para o Tradutor de Legenda, volte aqui e toque em COMEÇAR de novo."
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
@@ -178,6 +189,7 @@ class MainActivity : Activity() {
             putExtra("speak", swSpeak.isChecked)
             putExtra("showSub", swSub.isChecked)
             putExtra("bubble", swBubble.isChecked)
+            putExtra("genders", swGender.isChecked)
         }
         startForegroundService(i)
         status.text = "✅ Rodando! Agora abra seu vídeo com legenda."

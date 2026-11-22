@@ -66,6 +66,11 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private var speakOn = true
     private var showSub = true
     private var lastTranslation = ""
+    private var genders = true
+    private var tracker: PitchTracker? = null
+    private var lastGender: PitchTracker.Gender? = null
+    private var maleVoice: android.speech.tts.Voice? = null
+    private var femaleVoice: android.speech.tts.Voice? = null
 
     private var area = 0.35f
     private var speed = 1.25f
@@ -106,6 +111,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         speed = intent.getFloatExtra("speed", 1.25f)
         speakOn = intent.getBooleanExtra("speak", true)
         showSub = intent.getBooleanExtra("showSub", true)
+        genders = intent.getBooleanExtra("genders", true)
         val showBubble = intent.getBooleanExtra("bubble", true)
         paused = false
         if (overlay == null) overlay = Overlay(this, onToggle = { togglePause() }, onStop = { stopSelf() })
@@ -115,6 +121,16 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         val mpm = getSystemService(MediaProjectionManager::class.java)
         projection = mpm.getMediaProjection(code, data)
         projection?.registerCallback(projCallback, handler)
+
+        tracker?.stop(); tracker = null
+        if (genders && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            projection?.let { p ->
+                val t = PitchTracker(p)
+                if (t.start()) tracker = t
+            }
+        }
 
         if (tts == null) tts = TextToSpeech(this, this)
 
@@ -298,8 +314,11 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun translateAndSpeak(text: String) {
+        // vê quem estava falando agora (homem/mulher) pelo tom da voz
+        val g = tracker?.recentGender() ?: lastGender
+        if (g != null) lastGender = g
         translator?.translate(text)
-            ?.addOnSuccessListener { tr -> if (!paused) deliver(tr) }
+            ?.addOnSuccessListener { tr -> if (!paused) deliver(tr, g) }
     }
 
     // ---------- Voz ----------
@@ -314,20 +333,68 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             @Deprecated("Deprecated in Java")
             override fun onError(utteranceId: String?) { pending = max(0, pending - 1) }
         })
+        t.setAudioAttributes(
+            android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+        )
+        defaultVoice = t.voice
+        pickVoices(t)
         ttsReady = true
     }
 
-    private fun deliver(text: String) {
-        if (text.isBlank()) return
-        lastTranslation = text
-        if (showSub) overlay?.showSubtitle(text)
-        if (speakOn) speak(text) else updateNotif(text)
+    private var defaultVoice: android.speech.tts.Voice? = null
+
+    // Procura vozes de homem e de mulher em português no celular
+    private fun pickVoices(t: TextToSpeech) {
+        val pt = try {
+            t.voices?.filter { it.locale.language == "pt" } ?: emptyList()
+        } catch (_: Exception) { emptyList() }
+        val offline = pt.filter { !it.isNetworkConnectionRequired }
+        fun find(list: List<android.speech.tts.Voice>, male: Boolean) = list.firstOrNull { v ->
+            val n = v.name.lowercase(Locale.ROOT)
+            val isFemale = n.contains("female") || n.contains("smtf") || n.contains("#female")
+            val isMale = !isFemale && (n.contains("male") || n.contains("smtm"))
+            if (male) isMale else isFemale
+        }
+        maleVoice = find(offline, true) ?: find(pt, true)
+        femaleVoice = find(offline, false) ?: find(pt, false)
     }
 
-    private fun speak(text: String) {
+    private fun applyVoice(t: TextToSpeech, g: PitchTracker.Gender?) {
+        when (g) {
+            PitchTracker.Gender.MALE -> {
+                val v = maleVoice
+                if (v != null) { t.voice = v; t.setPitch(1.0f) }
+                else { defaultVoice?.let { t.voice = it }; t.setPitch(0.68f) } // engrossa a voz
+            }
+            PitchTracker.Gender.FEMALE -> {
+                val v = femaleVoice
+                if (v != null) { t.voice = v; t.setPitch(1.05f) }
+                else { defaultVoice?.let { t.voice = it }; t.setPitch(1.15f) }
+            }
+            null -> { defaultVoice?.let { t.voice = it }; t.setPitch(1.0f) }
+        }
+    }
+
+    private fun deliver(text: String, g: PitchTracker.Gender?) {
+        if (text.isBlank()) return
+        lastTranslation = text
+        val icon = when (g) {
+            PitchTracker.Gender.MALE -> "👨 "
+            PitchTracker.Gender.FEMALE -> "👩 "
+            null -> ""
+        }
+        if (showSub) overlay?.showSubtitle(if (genders) icon + text else text)
+        if (speakOn) speak(text, g) else updateNotif(text)
+    }
+
+    private fun speak(text: String, g: PitchTracker.Gender? = null) {
         val t = tts ?: return
         if (!ttsReady || text.isBlank()) return
         t.setSpeechRate(speed)
+        if (genders) applyVoice(t, g)
         // se a voz ficar muito atrasada, pula o que ficou para trás
         val mode = if (pending >= 2) {
             pending = 0
@@ -389,6 +456,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
+        tracker?.stop(); tracker = null
         stopCapture()
         overlay?.removeAll(); overlay = null
         tts?.stop(); tts?.shutdown(); tts = null
