@@ -51,6 +51,7 @@ class MainActivity : Activity() {
     private lateinit var swSpeak: Switch
     private lateinit var swSub: Switch
     private lateinit var swBubble: Switch
+    private lateinit var swDuck: Switch
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -98,7 +99,8 @@ class MainActivity : Activity() {
         swSpeak = switch("🔊 Falar a tradução", "speak")
         swSub = switch("💬 Mostrar legenda traduzida na tela", "showSub")
         swBubble = switch("🎧 Botão flutuante por cima do vídeo", "bubble")
-        root.addView(swSpeak); root.addView(swSub); root.addView(swBubble)
+        swDuck = switch("🔉 Abaixar o som do vídeo quando a tradução falar", "duck")
+        root.addView(swSpeak); root.addView(swDuck); root.addView(swSub); root.addView(swBubble)
 
         val start = Button(this).apply {
             text = "▶  COMEÇAR"
@@ -124,7 +126,7 @@ class MainActivity : Activity() {
             "1. Escolha o idioma e toque em COMEÇAR.\n" +
             "2. Permita a captura de tela (escolha \"Tela inteira\" se perguntar).\n" +
             "3. Abra o vídeo com legenda ligada (YouTube, Netflix etc.).\n" +
-            "4. Baixe um pouco o volume do vídeo para ouvir a tradução.\n" +
+            "4. A voz usa o volume de mídia (o mesmo do vídeo). O vídeo abaixa sozinho enquanto ela fala.\n" +
             "5. Bolinha flutuante: toque = pausar/continuar, segure = desligar. Dá para arrastar.\n" +
             "6. A legenda traduzida aparece em cima; arraste para onde quiser, toque para esconder.\n\n" +
             "Na 1ª vez ele baixa o idioma (uns 30 MB) — use Wi‑Fi.\n" +
@@ -149,6 +151,7 @@ class MainActivity : Activity() {
             .putBoolean("speak", swSpeak.isChecked)
             .putBoolean("showSub", swSub.isChecked)
             .putBoolean("bubble", swBubble.isChecked)
+            .putBoolean("duck", swDuck.isChecked)
             .apply()
 
         if ((swSub.isChecked || swBubble.isChecked) && !Settings.canDrawOverlays(this)) {
@@ -179,6 +182,7 @@ class MainActivity : Activity() {
             putExtra("speak", swSpeak.isChecked)
             putExtra("showSub", swSub.isChecked)
             putExtra("bubble", swBubble.isChecked)
+            putExtra("duck", swDuck.isChecked)
         }
         startForegroundService(i)
         status.text = "✅ Rodando! Agora abra seu vídeo com legenda."

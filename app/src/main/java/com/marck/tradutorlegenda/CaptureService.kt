@@ -83,6 +83,14 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private var showSub = true
     private var area = 0.35f
     private var speed = 1.25f
+    private var duck = true
+    private var focusReq: android.media.AudioFocusRequest? = null
+    private var hasFocus = false
+    private val releaseFocus = Runnable { abandonFocus() }
+    private val speechAttrs: AudioAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_MEDIA) // segue o volume de mídia (bem mais alto)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
 
     // controle da legenda (usado só na thread principal)
     private var candidate = ""          // legenda vista na última leitura
@@ -124,6 +132,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         speed = intent.getFloatExtra("speed", 1.25f)
         speakOn = intent.getBooleanExtra("speak", true)
         showSub = intent.getBooleanExtra("showSub", true)
+        duck = intent.getBooleanExtra("duck", true)
         val showBubble = intent.getBooleanExtra("bubble", true)
         paused = false
         resetState()
@@ -340,20 +349,48 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         if (status != TextToSpeech.SUCCESS) return
         val t = tts ?: return
         t.language = Locale("pt", "BR")
-        t.setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANT)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build()
-        )
+        t.setAudioAttributes(speechAttrs)
         t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
-            override fun onDone(utteranceId: String?) { speakingCount = max(0, speakingCount - 1) }
+            override fun onDone(utteranceId: String?) { finished() }
             @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) { speakingCount = max(0, speakingCount - 1) }
-            override fun onStop(utteranceId: String?, interrupted: Boolean) { speakingCount = 0 }
+            override fun onError(utteranceId: String?) { finished() }
+            override fun onStop(utteranceId: String?, interrupted: Boolean) {
+                speakingCount = 0
+                main.post { abandonFocus() }
+            }
         })
         ttsReady = true
+    }
+
+    private fun finished() {
+        speakingCount = max(0, speakingCount - 1)
+        if (speakingCount == 0) {
+            // devolve o som do vídeo um pouquinho depois (evita sobe-e-desce)
+            main.removeCallbacks(releaseFocus)
+            main.postDelayed(releaseFocus, 500)
+        }
+    }
+
+    // Abaixa o som do vídeo enquanto a tradução fala
+    private fun requestFocus() {
+        main.removeCallbacks(releaseFocus)
+        if (!duck || hasFocus) return
+        val am = getSystemService(android.media.AudioManager::class.java)
+        val req = focusReq ?: android.media.AudioFocusRequest.Builder(
+            android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+        )
+            .setAudioAttributes(speechAttrs)
+            .setWillPauseWhenDucked(false)
+            .setOnAudioFocusChangeListener { }
+            .build().also { focusReq = it }
+        hasFocus = am.requestAudioFocus(req) == android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+
+    private fun abandonFocus() {
+        if (!hasFocus) return
+        focusReq?.let { getSystemService(android.media.AudioManager::class.java).abandonAudioFocusRequest(it) }
+        hasFocus = false
     }
 
     private fun speak(text: String) {
@@ -367,7 +404,11 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             TextToSpeech.QUEUE_FLUSH
         } else TextToSpeech.QUEUE_ADD
         speakingCount++
-        t.speak(text, mode, null, "u" + System.nanoTime())
+        requestFocus()
+        val params = android.os.Bundle().apply {
+            putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, 1.0f)
+        }
+        t.speak(text, mode, params, "u" + System.nanoTime())
         updateNotif(text)
     }
 
@@ -440,6 +481,8 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         stopCapture()
         overlay?.removeAll(); overlay = null
+        main.removeCallbacks(releaseFocus)
+        abandonFocus()
         tts?.stop(); tts?.shutdown(); tts = null
         translator?.close(); translator = null
         recognizer.close()
