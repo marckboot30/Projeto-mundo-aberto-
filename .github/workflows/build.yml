@@ -33,6 +33,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
           name: Tradutor de Legenda v${{ github.run_number }}
           body: Baixe o arquivo TradutorLegenda.apk abaixo e instale no celular.
           files: TradutorLegenda.apk

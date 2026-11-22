@@ -11,11 +11,13 @@ import android.graphics.Bitmap
 import android.graphics.PixelFormat
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
+import android.media.AudioAttributes
 import android.media.ImageReader
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
 import android.speech.tts.TextToSpeech
@@ -34,24 +36,37 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
+/**
+ * Lê a legenda da tela (só imagem, não usa o áudio), traduz e fala.
+ * Feito para ser rápido:
+ *  - lê a tela de novo assim que termina a leitura anterior (~3-5 vezes por segundo)
+ *  - começa a traduzir na 1ª vez que vê a legenda nova
+ *  - fala assim que a 2ª leitura confirma que a legenda é a mesma
+ *  - se a voz ficar atrasada, pula para a legenda atual e acelera a fala
+ */
 class CaptureService : Service(), TextToSpeech.OnInitListener {
 
     companion object {
         const val ACTION_STOP = "com.marck.tradutorlegenda.STOP"
         private const val CHANNEL = "tradutor"
         private const val NOTIF_ID = 1
-        private const val INTERVAL_MS = 700L
+        private const val GAP_MS = 120L          // pausa entre uma leitura e outra
+        private const val MAX_SIDE = 960f        // tamanho da imagem lida (menor = mais rápido)
     }
 
-    private val handler = Handler(Looper.getMainLooper())
+    private val main = Handler(Looper.getMainLooper())
+    private val capThread = HandlerThread("captura").apply { start() }
+    private val cap = Handler(capThread.looper)
+    private val mainExec = java.util.concurrent.Executor { main.post(it) }
+
     private var projection: MediaProjection? = null
-    private var display: VirtualDisplay? = null
-    private var reader: ImageReader? = null
     private val projCallback = object : MediaProjection.Callback() {
         override fun onStop() {
-            stopSelf()
+            main.post { stopSelf() }
         }
     }
+    private var display: VirtualDisplay? = null
+    private var reader: ImageReader? = null
     private var capW = 0
     private var capH = 0
 
@@ -59,25 +74,23 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private var translator: Translator? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-    @Volatile private var pending = 0
+    @Volatile private var speakingCount = 0
 
     private var overlay: Overlay? = null
-    private var paused = false
+    @Volatile private var paused = false
+    @Volatile private var running = false
     private var speakOn = true
     private var showSub = true
-    private var lastTranslation = ""
-    private var genders = true
-    private var tracker: PitchTracker? = null
-    private var lastGender: PitchTracker.Gender? = null
-    private var maleVoice: android.speech.tts.Voice? = null
-    private var femaleVoice: android.speech.tts.Voice? = null
-
     private var area = 0.35f
     private var speed = 1.25f
-    private var busy = false
-    private var running = false
-    private var lastSeen = ""
-    private var lastSpoken = ""
+
+    // controle da legenda (usado só na thread principal)
+    private var candidate = ""          // legenda vista na última leitura
+    private var candidateTr: String? = null
+    private var candidateConfirmed = false
+    private var lastDelivered = ""      // última legenda (original) já falada
+    private var lastTranslation = ""
+    private var gen = 0                 // muda a cada legenda nova (descarta traduções velhas)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -90,15 +103,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
 
         createChannel()
         val notif = buildNotif("Preparando…")
-        val micOk = intent.getBooleanExtra("genders", true) &&
-            checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
-            android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (Build.VERSION.SDK_INT >= 30 && micOk) {
-            startForeground(
-                NOTIF_ID, notif,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
-            )
-        } else if (Build.VERSION.SDK_INT >= 29) {
+        if (Build.VERSION.SDK_INT >= 29) {
             startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
             startForeground(NOTIF_ID, notif)
@@ -119,26 +124,17 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         speed = intent.getFloatExtra("speed", 1.25f)
         speakOn = intent.getBooleanExtra("speak", true)
         showSub = intent.getBooleanExtra("showSub", true)
-        genders = intent.getBooleanExtra("genders", true)
         val showBubble = intent.getBooleanExtra("bubble", true)
         paused = false
+        resetState()
+
         if (overlay == null) overlay = Overlay(this, onToggle = { togglePause() }, onStop = { stopSelf() })
         if (showBubble) overlay?.showBubble()
         overlay?.setPaused(false)
 
         val mpm = getSystemService(MediaProjectionManager::class.java)
         projection = mpm.getMediaProjection(code, data)
-        projection?.registerCallback(projCallback, handler)
-
-        tracker?.stop(); tracker = null
-        if (genders && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
-            android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            projection?.let { p ->
-                val t = PitchTracker(p)
-                if (t.start()) tracker = t
-            }
-        }
+        projection?.registerCallback(projCallback, main)
 
         if (tts == null) tts = TextToSpeech(this, this)
 
@@ -162,6 +158,11 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         return START_NOT_STICKY
     }
 
+    private fun resetState() {
+        candidate = ""; candidateTr = null; candidateConfirmed = false
+        lastDelivered = ""; lastTranslation = ""; gen++
+    }
+
     // ---------- Captura de tela ----------
 
     private fun screenSize(): Triple<Int, Int, Int> {
@@ -169,8 +170,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         val metrics = DisplayMetrics()
         @Suppress("DEPRECATION")
         dm.getDisplay(Display.DEFAULT_DISPLAY).getRealMetrics(metrics)
-        // reduz para o lado maior ter ~1280px (rápido e suficiente para ler legenda)
-        val scale = min(1f, 1280f / max(metrics.widthPixels, metrics.heightPixels))
+        val scale = min(1f, MAX_SIDE / max(metrics.widthPixels, metrics.heightPixels))
         val w = (metrics.widthPixels * scale).roundToInt()
         val h = (metrics.heightPixels * scale).roundToInt()
         val dpi = max(120, (metrics.densityDpi * scale).roundToInt())
@@ -185,13 +185,12 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         display = p.createVirtualDisplay(
             "tradutor-legenda", w, h, dpi,
             DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-            reader!!.surface, null, handler
+            reader!!.surface, null, cap
         )
         running = true
-        handler.postDelayed(tick, INTERVAL_MS)
+        cap.postDelayed(captureStep, 300)
     }
 
-    // Quando o celular gira (vídeo deitado), ajusta o tamanho da captura
     private fun checkRotation() {
         val (w, h, dpi) = screenSize()
         if (w == capW && h == capH) return
@@ -204,27 +203,37 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         old?.close()
     }
 
-    private val tick = object : Runnable {
+    private fun next(delay: Long = GAP_MS) {
+        if (running) cap.postDelayed(captureStep, delay)
+    }
+
+    // roda na thread de captura (não trava nada)
+    private val captureStep = object : Runnable {
         override fun run() {
             if (!running) return
-            if (paused) {
-                handler.postDelayed(this, INTERVAL_MS)
-                return
-            }
-            try {
-                captureOnce()
-            } catch (_: Exception) {
-                busy = false
-            }
-            handler.postDelayed(this, INTERVAL_MS)
+            if (paused) { next(300); return }
+            val crop = try {
+                checkRotation()
+                grab()
+            } catch (_: Exception) { null }
+            if (crop == null) { next(80); return }
+            recognizer.process(InputImage.fromBitmap(crop, 0))
+                .addOnSuccessListener(mainExec) { result ->
+                    val lines = result.textBlocks
+                        .flatMap { it.lines }
+                        .map { it.text.trim() }
+                        .filter { isSubtitleLine(it) }
+                    onText(lines.joinToString(" ").trim())
+                }
+                .addOnCompleteListener(mainExec) {
+                    crop.recycle()
+                    next()
+                }
         }
     }
 
-    private fun captureOnce() {
-        if (busy) return
-        checkRotation()
-        val img = reader?.acquireLatestImage() ?: return
-        val crop: Bitmap
+    private fun grab(): Bitmap? {
+        val img = reader?.acquireLatestImage() ?: return null
         try {
             val plane = img.planes[0]
             val pixelStride = plane.pixelStride
@@ -232,24 +241,12 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             val full = Bitmap.createBitmap(img.width + rowPadding / pixelStride, img.height, Bitmap.Config.ARGB_8888)
             full.copyPixelsFromBuffer(plane.buffer)
             val top = (img.height * (1f - area)).roundToInt().coerceIn(0, img.height - 1)
-            crop = Bitmap.createBitmap(full, 0, top, img.width, img.height - top)
+            val crop = Bitmap.createBitmap(full, 0, top, img.width, img.height - top)
             if (crop !== full) full.recycle()
+            return crop
         } finally {
             img.close()
         }
-        busy = true
-        recognizer.process(InputImage.fromBitmap(crop, 0))
-            .addOnSuccessListener { result ->
-                val lines = result.textBlocks
-                    .flatMap { it.lines }
-                    .map { it.text.trim() }
-                    .filter { isSubtitleLine(it) }
-                onText(lines.joinToString(" ").trim())
-            }
-            .addOnCompleteListener {
-                busy = false
-                crop.recycle()
-            }
     }
 
     // Ignora botões, tempo do vídeo e outras coisas que não são fala
@@ -261,7 +258,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         return letters.toFloat() / s.length > 0.5f
     }
 
-    // ---------- Decide quando falar ----------
+    // ---------- Comparar textos ----------
 
     private fun norm(s: String) = s.lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
 
@@ -288,45 +285,53 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         return prev[b.length]
     }
 
-    private fun togglePause() {
-        paused = !paused
-        overlay?.setPaused(paused)
-        if (paused) {
-            tts?.stop()
-            pending = 0
-            updateNotif("Pausado — toque na bolinha para continuar")
-        } else {
-            lastSeen = ""
-            updateNotif("Lendo legendas…")
-        }
-    }
+    // ---------- Decide quando falar (thread principal) ----------
 
     private fun onText(text: String) {
-        // não lê a própria tradução se ela aparecer na captura
-        if (lastTranslation.isNotEmpty() && similar(text, lastTranslation)) return
+        if (paused) return
         if (text.isEmpty()) {
-            lastSeen = ""
+            candidate = ""; candidateTr = null; candidateConfirmed = false
             return
         }
-        // só fala quando a legenda ficou parada por 2 leituras seguidas (evita ler pela metade)
-        if (similar(text, lastSeen) && !similar(text, lastSpoken)) {
-            val nt = norm(text); val nl = norm(lastSpoken)
-            val toSay = if (nl.length >= 6 && nt.startsWith(nl) && text.length > lastSpoken.length) {
-                // legenda que vai crescendo (ex.: legenda automática do YouTube): fala só o pedaço novo
-                text.substring(min(lastSpoken.length, text.length)).trim()
-            } else text
-            lastSpoken = text
-            if (toSay.isNotEmpty()) translateAndSpeak(toSay)
+        if (lastTranslation.isNotEmpty() && similar(text, lastTranslation)) return
+        if (similar(text, lastDelivered)) return // já falou essa
+
+        if (similar(text, candidate)) {
+            // 2ª leitura igual: legenda confirmada
+            if (!candidateConfirmed) {
+                candidateConfirmed = true
+                candidate = if (text.length >= candidate.length) text else candidate
+                candidateTr?.let { deliver(candidate, it) }
+            }
+            return
         }
-        lastSeen = text
+
+        // legenda nova: já começa a traduzir (ganha tempo)
+        candidate = text
+        candidateTr = null
+        candidateConfirmed = false
+        val myGen = ++gen
+
+        // legenda que vai crescendo (legenda automática do YouTube): traduz só o pedaço novo
+        val nt = norm(text); val nl = norm(lastDelivered)
+        val toTranslate = if (nl.length >= 6 && nt.startsWith(nl) && text.length > lastDelivered.length) {
+            text.substring(min(lastDelivered.length, text.length)).trim()
+        } else text
+        if (toTranslate.isEmpty()) return
+
+        translator?.translate(toTranslate)?.addOnSuccessListener { tr ->
+            if (myGen != gen || paused) return@addOnSuccessListener
+            candidateTr = tr
+            if (candidateConfirmed) deliver(candidate, tr)
+        }
     }
 
-    private fun translateAndSpeak(text: String) {
-        // vê quem estava falando agora (homem/mulher) pelo tom da voz
-        val g = tracker?.recentGender() ?: lastGender
-        if (g != null) lastGender = g
-        translator?.translate(text)
-            ?.addOnSuccessListener { tr -> if (!paused) deliver(tr, g) }
+    private fun deliver(original: String, tr: String) {
+        if (tr.isBlank() || similar(original, lastDelivered)) return
+        lastDelivered = original
+        lastTranslation = tr
+        if (showSub) overlay?.showSubtitle(tr)
+        if (speakOn) speak(tr) else updateNotif(tr)
     }
 
     // ---------- Voz ----------
@@ -335,82 +340,48 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         if (status != TextToSpeech.SUCCESS) return
         val t = tts ?: return
         t.language = Locale("pt", "BR")
-        t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) {}
-            override fun onDone(utteranceId: String?) { pending = max(0, pending - 1) }
-            @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) { pending = max(0, pending - 1) }
-        })
         t.setAudioAttributes(
-            android.media.AudioAttributes.Builder()
-                .setUsage(android.media.AudioAttributes.USAGE_ASSISTANT)
-                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+            AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ASSISTANT)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                 .build()
         )
-        defaultVoice = t.voice
-        pickVoices(t)
+        t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {}
+            override fun onDone(utteranceId: String?) { speakingCount = max(0, speakingCount - 1) }
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) { speakingCount = max(0, speakingCount - 1) }
+            override fun onStop(utteranceId: String?, interrupted: Boolean) { speakingCount = 0 }
+        })
         ttsReady = true
     }
 
-    private var defaultVoice: android.speech.tts.Voice? = null
-
-    // Procura vozes de homem e de mulher em português no celular
-    private fun pickVoices(t: TextToSpeech) {
-        val pt = try {
-            t.voices?.filter { it.locale.language == "pt" } ?: emptyList()
-        } catch (_: Exception) { emptyList() }
-        val offline = pt.filter { !it.isNetworkConnectionRequired }
-        fun find(list: List<android.speech.tts.Voice>, male: Boolean) = list.firstOrNull { v ->
-            val n = v.name.lowercase(Locale.ROOT)
-            val isFemale = n.contains("female") || n.contains("smtf") || n.contains("#female")
-            val isMale = !isFemale && (n.contains("male") || n.contains("smtm"))
-            if (male) isMale else isFemale
-        }
-        maleVoice = find(offline, true) ?: find(pt, true)
-        femaleVoice = find(offline, false) ?: find(pt, false)
-    }
-
-    private fun applyVoice(t: TextToSpeech, g: PitchTracker.Gender?) {
-        when (g) {
-            PitchTracker.Gender.MALE -> {
-                val v = maleVoice
-                if (v != null) { t.voice = v; t.setPitch(1.0f) }
-                else { defaultVoice?.let { t.voice = it }; t.setPitch(0.68f) } // engrossa a voz
-            }
-            PitchTracker.Gender.FEMALE -> {
-                val v = femaleVoice
-                if (v != null) { t.voice = v; t.setPitch(1.05f) }
-                else { defaultVoice?.let { t.voice = it }; t.setPitch(1.15f) }
-            }
-            null -> { defaultVoice?.let { t.voice = it }; t.setPitch(1.0f) }
-        }
-    }
-
-    private fun deliver(text: String, g: PitchTracker.Gender?) {
-        if (text.isBlank()) return
-        lastTranslation = text
-        val icon = when (g) {
-            PitchTracker.Gender.MALE -> "👨 "
-            PitchTracker.Gender.FEMALE -> "👩 "
-            null -> ""
-        }
-        if (showSub) overlay?.showSubtitle(if (genders) icon + text else text)
-        if (speakOn) speak(text, g) else updateNotif(text)
-    }
-
-    private fun speak(text: String, g: PitchTracker.Gender? = null) {
+    private fun speak(text: String) {
         val t = tts ?: return
         if (!ttsReady || text.isBlank()) return
-        t.setSpeechRate(speed)
-        if (genders) applyVoice(t, g)
-        // se a voz ficar muito atrasada, pula o que ficou para trás
-        val mode = if (pending >= 2) {
-            pending = 0
+        val behind = speakingCount
+        // Ainda falando a anterior? acelera. Muito atrasado? corta e fala a atual.
+        t.setSpeechRate(if (behind >= 1) speed * 1.25f else speed)
+        val mode = if (behind >= 2) {
+            speakingCount = 0
             TextToSpeech.QUEUE_FLUSH
         } else TextToSpeech.QUEUE_ADD
-        pending++
+        speakingCount++
         t.speak(text, mode, null, "u" + System.nanoTime())
         updateNotif(text)
+    }
+
+    private fun togglePause() {
+        paused = !paused
+        overlay?.setPaused(paused)
+        if (paused) {
+            tts?.stop()
+            speakingCount = 0
+            updateNotif("Pausado — toque na bolinha para continuar")
+        } else {
+            resetState()
+            updateNotif("Lendo legendas…")
+        }
     }
 
     // ---------- Notificação ----------
@@ -435,7 +406,6 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        @Suppress("DEPRECATION")
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle("Tradutor de Legenda ligado")
@@ -456,20 +426,24 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
 
     private fun stopCapture() {
         running = false
-        handler.removeCallbacks(tick)
-        display?.release(); display = null
-        reader?.close(); reader = null
-        projection?.unregisterCallback(projCallback)
-        projection?.stop(); projection = null
+        cap.removeCallbacksAndMessages(null)
+        val d = display; val r = reader; val p = projection
+        display = null; reader = null; projection = null
+        cap.post {
+            d?.release()
+            r?.close()
+        }
+        p?.unregisterCallback(projCallback)
+        p?.stop()
     }
 
     override fun onDestroy() {
-        tracker?.stop(); tracker = null
         stopCapture()
         overlay?.removeAll(); overlay = null
         tts?.stop(); tts?.shutdown(); tts = null
         translator?.close(); translator = null
         recognizer.close()
+        capThread.quitSafely()
         super.onDestroy()
     }
 }
