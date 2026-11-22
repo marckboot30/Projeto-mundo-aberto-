@@ -8,7 +8,39 @@ on:
 permissions:
   contents: write
 
+env:
+  SHERPA_VERSION: v1.12.40
+
 jobs:
+  vozes:
+    # Publica as vozes de IA (uma vez) para o app baixar
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verificar se as vozes já estão publicadas
+        id: check
+        run: |
+          if gh release view vozes -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "existe=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "existe=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Baixar e empacotar vozes
+        if: steps.check.outputs.existe == '0'
+        run: |
+          set -e
+          for v in miro dii; do
+            curl -sSL -o $v.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-pt_BR-$v-high.tar.bz2"
+            tar xjf $v.tar.bz2
+          done
+          zip -qr voz-masculina.zip vits-piper-pt_BR-miro-high
+          zip -qr voz-feminina.zip vits-piper-pt_BR-dii-high
+          ls -lh *.zip
+          gh release create vozes voz-masculina.zip voz-feminina.zip -R "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" --title "Vozes de IA do Tradutor de Legenda" \
+            --notes "Vozes Piper (pt-BR) usadas pelo app. Miro = masculina, Dii = feminina. Fonte: k2-fsa/sherpa-onnx tts-models."
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -23,8 +55,28 @@ jobs:
         with:
           gradle-version: '8.11.1'
 
+      - name: Bibliotecas das vozes de IA (sherpa-onnx)
+        run: |
+          set -e
+          curl -sSL -o so.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VERSION}/sherpa-onnx-${SHERPA_VERSION}-android.tar.bz2"
+          tar xjf so.tar.bz2
+          mkdir -p app/src/main/jniLibs
+          cp -r jniLibs/arm64-v8a jniLibs/armeabi-v7a app/src/main/jniLibs/
+          ls -lR app/src/main/jniLibs
+
       - name: Compilar
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleDebug --no-daemon 2>&1 | tee build.log
+
+      - name: Publicar log de erro
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          grep -E "^e: |error:|FAILURE|What went wrong" -A3 build.log | head -150 > erro.txt || true
+          gh release delete log-erro -y --cleanup-tag -R "$GITHUB_REPOSITORY" || true
+          gh release create log-erro erro.txt build.log -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "log de erro" --notes "erro de compilação" --prerelease
 
       - name: Renomear APK
         run: cp app/build/outputs/apk/debug/app-debug.apk TradutorLegenda.apk

@@ -11,8 +11,15 @@ android {
         applicationId = "com.marck.tradutorlegenda"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.5"
+        versionCode = 7
+        versionName = "2.0"
+        ndk {
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+
+    androidResources {
+        noCompress += "tflite"
     }
 
     signingConfigs {
@@ -44,4 +51,9 @@ dependencies {
     implementation("com.google.mlkit:text-recognition:16.0.1")
     // Tradução no próprio celular (baixa o idioma só na 1ª vez)
     implementation("com.google.mlkit:translate:17.0.3")
+    // Teste: achar rosto e boca de quem fala
+    implementation("com.google.mlkit:face-detection:16.1.7")
+    // Teste: estimar homem/mulher pelo rosto
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    // Vozes de IA (sherpa-onnx): as bibliotecas .so são baixadas pelo GitHub Actions
 }

@@ -58,6 +58,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private val capThread = HandlerThread("captura").apply { start() }
     private val cap = Handler(capThread.looper)
     private val mainExec = java.util.concurrent.Executor { main.post(it) }
+    private val capExec = java.util.concurrent.Executor { cap.post(it) }
 
     private var projection: MediaProjection? = null
     private val projCallback = object : MediaProjection.Callback() {
@@ -85,6 +86,12 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private var speed = 1.25f
     private var duck = true
     private var pitch = 1.0f
+    private var voiceMode = "sistema"   // sistema | ia_m | ia_f | auto
+    private var neural: NeuralSpeaker? = null
+    private var detector: SpeakerDetector? = null
+    @Volatile private var lastFaceRun = 0L
+    private var lastGender: SpeakerDetector.Gender? = null
+    private var candidateGender: SpeakerDetector.Gender? = null
     private var voiceName = ""
     private var focusReq: android.media.AudioFocusRequest? = null
     private var hasFocus = false
@@ -137,6 +144,8 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         duck = intent.getBooleanExtra("duck", true)
         pitch = intent.getFloatExtra("pitch", 1.0f)
         voiceName = intent.getStringExtra("voice") ?: ""
+        voiceMode = intent.getStringExtra("voiceMode") ?: "sistema"
+        setupVoices()
         if (ttsReady) applyVoiceSettings()
         val showBubble = intent.getBooleanExtra("bubble", true)
         paused = false
@@ -170,6 +179,27 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             }
 
         return START_NOT_STICKY
+    }
+
+    private fun setupVoices() {
+        val needMale = voiceMode == "ia_m" || voiceMode == "auto"
+        val needFemale = voiceMode == "ia_f" || voiceMode == "auto"
+        val anyInstalled = (needMale && NeuralVoices.isInstalled(this, VoiceKind.MALE)) ||
+            (needFemale && NeuralVoices.isInstalled(this, VoiceKind.FEMALE))
+        if (anyInstalled) {
+            if (neural == null) neural = NeuralSpeaker(
+                this,
+                onStart = { main.post { requestFocus() } },
+                onDone = { main.post { main.removeCallbacks(releaseFocus); main.postDelayed(releaseFocus, 500) } }
+            )
+            if (needMale && NeuralVoices.isInstalled(this, VoiceKind.MALE)) neural?.preload(VoiceKind.MALE)
+            if (needFemale && NeuralVoices.isInstalled(this, VoiceKind.FEMALE)) neural?.preload(VoiceKind.FEMALE)
+        }
+        if (voiceMode == "auto") {
+            if (detector == null) detector = SpeakerDetector(this, capExec)
+        } else {
+            detector?.close(); detector = null
+        }
     }
 
     private fun resetState() {
@@ -256,11 +286,26 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             full.copyPixelsFromBuffer(plane.buffer)
             val top = (img.height * (1f - area)).roundToInt().coerceIn(0, img.height - 1)
             val crop = Bitmap.createBitmap(full, 0, top, img.width, img.height - top)
+            feedDetector(full)
             if (crop !== full) full.recycle()
             return crop
         } finally {
             img.close()
         }
+    }
+
+    // Manda uma cópia pequena da tela para o detector de rosto (umas 3 vezes por segundo)
+    private fun feedDetector(full: Bitmap) {
+        val d = detector ?: return
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (d.busy || now - lastFaceRun < 300) return
+        lastFaceRun = now
+        val scale = min(1f, 480f / max(full.width, full.height))
+        val small = Bitmap.createScaledBitmap(
+            full, max(1, (full.width * scale).roundToInt()), max(1, (full.height * scale).roundToInt()), true
+        )
+        if (small === full) return
+        d.process(small)
     }
 
     // Ignora botões, tempo do vídeo e outras coisas que não são fala
@@ -324,6 +369,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         candidate = text
         candidateTr = null
         candidateConfirmed = false
+        candidateGender = detector?.currentSpeaker()
         val myGen = ++gen
 
         // legenda que vai crescendo (legenda automática do YouTube): traduz só o pedaço novo
@@ -344,8 +390,15 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         if (tr.isBlank() || similar(original, lastDelivered)) return
         lastDelivered = original
         lastTranslation = tr
-        if (showSub) overlay?.showSubtitle(tr)
-        if (speakOn) speak(tr) else updateNotif(tr)
+        val g = candidateGender ?: detector?.currentSpeaker() ?: lastGender
+        if (g != null) lastGender = g
+        val icon = if (voiceMode == "auto") when (g) {
+            SpeakerDetector.Gender.MALE -> "👨 "
+            SpeakerDetector.Gender.FEMALE -> "👩 "
+            null -> ""
+        } else ""
+        if (showSub) overlay?.showSubtitle(icon + tr)
+        if (speakOn) speakOut(tr, g) else updateNotif(tr)
     }
 
     // ---------- Voz ----------
@@ -367,6 +420,24 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             }
         })
         ttsReady = true
+    }
+
+    // Escolhe a voz: IA masculina, IA feminina, automática (rosto) ou a do celular
+    private fun speakOut(text: String, g: SpeakerDetector.Gender?) {
+        val kind: VoiceKind? = when (voiceMode) {
+            "ia_m" -> VoiceKind.MALE
+            "ia_f" -> VoiceKind.FEMALE
+            "auto" -> if (g == SpeakerDetector.Gender.FEMALE) VoiceKind.FEMALE else VoiceKind.MALE
+            else -> null
+        }
+        val n = neural
+        if (kind != null && n != null && NeuralVoices.isInstalled(this, kind)) {
+            val behind = n.pending
+            n.speak(text, kind, if (behind >= 1) speed * 1.2f else speed, pitch, flush = behind >= 2)
+            updateNotif(text)
+            return
+        }
+        speak(text)
     }
 
     // voz escolhida + tom (grossa/fina)
@@ -433,6 +504,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         paused = !paused
         overlay?.setPaused(paused)
         if (paused) {
+            neural?.stopAll()
             tts?.stop()
             speakingCount = 0
             updateNotif("Pausado — toque na bolinha para continuar")
@@ -498,6 +570,8 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         stopCapture()
         overlay?.removeAll(); overlay = null
+        neural?.release(); neural = null
+        detector?.close(); detector = null
         main.removeCallbacks(releaseFocus)
         abandonFocus()
         tts?.stop(); tts?.shutdown(); tts = null

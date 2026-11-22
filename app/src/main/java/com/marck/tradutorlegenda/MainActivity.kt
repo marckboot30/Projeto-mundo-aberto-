@@ -62,6 +62,16 @@ class MainActivity : Activity() {
     private lateinit var langSpinner: Spinner
     private lateinit var areaSpinner: Spinner
     private lateinit var voiceSpinner: Spinner
+    private lateinit var modeSpinner: Spinner
+    private val dlRows = HashMap<VoiceKind, TextView>()
+    private val dlBtns = HashMap<VoiceKind, TextView>()
+    private var neuralTest: NeuralSpeaker? = null
+    private val modes = listOf(
+        "🤖  IA masculina (Miro)" to "ia_m",
+        "🤖  IA feminina (Dii)" to "ia_f",
+        "🎭  Automático: homem/mulher pelo rosto (teste)" to "auto",
+        "📱  Voz do celular" to "sistema"
+    )
     private lateinit var pitchBar: SeekBar
     private lateinit var speedBar: SeekBar
     private lateinit var pitchValue: TextView
@@ -139,7 +149,29 @@ class MainActivity : Activity() {
         swSpeak = switch("Falar a tradução", prefs.getBoolean("speak", true))
         cVoice.addView(swSpeak)
 
-        cVoice.addView(fieldLabel("Tipo de voz"))
+        cVoice.addView(fieldLabel("Voz do tradutor"))
+        modeSpinner = spinner(modes.map { it.first }, modes.indexOfFirst { it.second == prefs.getString("voiceMode", "ia_m") }.coerceAtLeast(0))
+        cVoice.addView(modeSpinner)
+
+        // vozes de IA para baixar (ficam dentro do app, funcionam sem internet)
+        cVoice.addView(fieldLabel("Vozes de IA (baixar uma vez, ~70 MB cada, use Wi‑Fi)"))
+        for (k in VoiceKind.values()) {
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.HORIZONTAL
+            row.gravity = Gravity.CENTER_VERTICAL
+            row.setPadding(0, dp(6), 0, dp(6))
+            val name = txt((if (k == VoiceKind.MALE) "👨 " else "👩 ") + k.label, 15f, fg)
+            row.addView(name, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            val btn = chip("") { onVoiceButton(k) }
+            btn.setPadding(dp(14), 0, dp(14), 0)
+            row.addView(btn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)))
+            dlRows[k] = name
+            dlBtns[k] = btn
+            cVoice.addView(row)
+        }
+        refreshVoiceButtons()
+
+        cVoice.addView(fieldLabel("Voz do celular (se escolher \"Voz do celular\")"))
         voiceSpinner = spinner(listOf("Padrão do celular"), 0)
         cVoice.addView(voiceSpinner)
 
@@ -230,6 +262,7 @@ class MainActivity : Activity() {
             "1. Escolha o idioma e a voz, depois toque em COMEÇAR.\n" +
                 "2. Permita a captura de tela (escolha \"Tela inteira\").\n" +
                 "3. Abra o vídeo com a legenda ligada.\n" +
+                "Modo Automático (teste): olha o rosto de quem mexe a boca e escolhe voz de homem ou mulher. Erra quando a pessoa não aparece, está de lado ou em desenho/anime.\n" +
                 "4. Bolinha 🎧: toque = pausar/continuar, segure = desligar.\n" +
                 "5. A legenda traduzida aparece em cima; arraste ou toque para esconder.\n\n" +
                 "Na 1ª vez ele baixa o idioma (~30 MB): use Wi‑Fi.\n" +
@@ -300,12 +333,65 @@ class MainActivity : Activity() {
         }
     }
 
+    private val downloading = HashSet<VoiceKind>()
+
+    private fun refreshVoiceButtons() {
+        for (k in VoiceKind.values()) {
+            val b = dlBtns[k] ?: continue
+            if (k in downloading) continue
+            if (NeuralVoices.isInstalled(this, k)) {
+                b.text = "✓ Baixada"
+                b.setTextColor(green)
+            } else {
+                b.text = "⬇ Baixar"
+                b.setTextColor(blue)
+            }
+        }
+    }
+
+    private fun onVoiceButton(k: VoiceKind) {
+        if (k in downloading) return
+        if (NeuralVoices.isInstalled(this, k)) {
+            // já baixada: toca um teste com ela
+            playNeural(k)
+            return
+        }
+        downloading.add(k)
+        val b = dlBtns[k] ?: return
+        b.text = "0%"
+        Thread {
+            val err = NeuralVoices.download(this, k) { pct -> runOnUiThread { b.text = "$pct%" } }
+            runOnUiThread {
+                downloading.remove(k)
+                refreshVoiceButtons()
+                if (err != null) setStatus(false, err) else {
+                    setStatus(false, "Voz ${k.label} pronta!")
+                    playNeural(k)
+                }
+            }
+        }.start()
+    }
+
+    private fun playNeural(k: VoiceKind) {
+        tts?.stop()
+        val n = neuralTest ?: NeuralSpeaker(this).also { neuralTest = it }
+        n.speak(
+            "Olá! Esta é a voz do seu tradutor de legenda.",
+            k, speedOf(speedBar.progress), pitchOf(pitchBar.progress), flush = true
+        )
+    }
+
     private fun selectedVoiceName(): String {
         val i = voiceSpinner.selectedItemPosition - 1
         return if (i in voices.indices) voices[i].name else ""
     }
 
     private fun testVoice() {
+        when (modes[modeSpinner.selectedItemPosition].second) {
+            "ia_m", "auto" -> if (NeuralVoices.isInstalled(this, VoiceKind.MALE)) { playNeural(VoiceKind.MALE); return }
+            "ia_f" -> if (NeuralVoices.isInstalled(this, VoiceKind.FEMALE)) { playNeural(VoiceKind.FEMALE); return }
+        }
+        neuralTest?.stopAll()
         val t = tts ?: return
         val i = voiceSpinner.selectedItemPosition - 1
         if (i in voices.indices) t.voice = voices[i] else t.language = Locale("pt", "BR")
@@ -323,6 +409,7 @@ class MainActivity : Activity() {
             .putInt("pitchP", pitchBar.progress)
             .putInt("speedP", speedBar.progress)
             .putString("voice", selectedVoiceName())
+            .putString("voiceMode", modes[modeSpinner.selectedItemPosition].second)
             .putBoolean("speak", swSpeak.isChecked)
             .putBoolean("showSub", swSub.isChecked)
             .putBoolean("bubble", swBubble.isChecked)
@@ -333,7 +420,19 @@ class MainActivity : Activity() {
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             return
         }
+        val mode = modes[modeSpinner.selectedItemPosition].second
+        val missing = when (mode) {
+            "ia_m" -> !NeuralVoices.isInstalled(this, VoiceKind.MALE)
+            "ia_f" -> !NeuralVoices.isInstalled(this, VoiceKind.FEMALE)
+            "auto" -> !NeuralVoices.isInstalled(this, VoiceKind.MALE) || !NeuralVoices.isInstalled(this, VoiceKind.FEMALE)
+            else -> false
+        }
+        if (missing) {
+            setStatus(false, "Baixe a voz de IA primeiro (botão ⬇ Baixar)")
+            return
+        }
         tts?.stop()
+        neuralTest?.stopAll()
         val mpm = getSystemService(MediaProjectionManager::class.java)
         @Suppress("DEPRECATION")
         startActivityForResult(mpm.createScreenCaptureIntent(), reqCapture)
@@ -356,6 +455,7 @@ class MainActivity : Activity() {
             putExtra("speed", speedOf(speedBar.progress))
             putExtra("pitch", pitchOf(pitchBar.progress))
             putExtra("voice", selectedVoiceName())
+            putExtra("voiceMode", modes[modeSpinner.selectedItemPosition].second)
             putExtra("speak", swSpeak.isChecked)
             putExtra("showSub", swSub.isChecked)
             putExtra("bubble", swBubble.isChecked)
@@ -368,6 +468,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         tts?.shutdown()
+        neuralTest?.release()
         super.onDestroy()
     }
 
