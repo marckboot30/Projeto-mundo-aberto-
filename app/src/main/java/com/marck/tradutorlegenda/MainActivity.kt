@@ -51,7 +51,8 @@ class MainActivity : Activity() {
         "🇪🇸  Espanhol" to TranslateLanguage.SPANISH,
         "🇫🇷  Francês" to TranslateLanguage.FRENCH,
         "🇩🇪  Alemão" to TranslateLanguage.GERMAN,
-        "🇮🇹  Italiano" to TranslateLanguage.ITALIAN
+        "🇮🇹  Italiano" to TranslateLanguage.ITALIAN,
+        "🇧🇷  Português (Brasil) — só ler em voz alta" to TranslateLanguage.PORTUGUESE
     )
     private val areas = listOf(
         "Parte de baixo (25%)" to 0.25f,

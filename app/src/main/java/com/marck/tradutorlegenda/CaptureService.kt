@@ -166,6 +166,13 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         if (tts == null) tts = TextToSpeech(this, this)
 
         translator?.close()
+        translator = null
+        if (lang == TranslateLanguage.PORTUGUESE) {
+            // legenda já em português: só lê em voz alta (sem traduzir)
+            updateNotif("Lendo legendas em português… abra seu vídeo")
+            startCapture()
+            return START_NOT_STICKY
+        }
         translator = Translation.getClient(
             TranslatorOptions.Builder()
                 .setSourceLanguage(lang)
@@ -379,6 +386,15 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         // limpa o texto e separa as falas antes de traduzir
         val segments = TextFixer.cleanSource(toTranslate, srcLang)
         if (segments.isEmpty()) return
+        if (srcLang == TranslateLanguage.PORTUGUESE) {
+            val text0 = segments.joinToString(" ") { t -> if (segments.size == 1 || t.last() in ".!?…") t else "$t." }
+            val out = TextFixer.applyCorrections(text0, corrections)
+            if (out.isEmpty()) return
+            candidateTr = out
+            candidateConfirmed = true
+            deliver(candidate, out)
+            return
+        }
         val tr0 = translator ?: return
         val tasks = segments.map { tr0.translate(it) }
         com.google.android.gms.tasks.Tasks.whenAllSuccess<String>(tasks).addOnSuccessListener(mainExec) { list ->
