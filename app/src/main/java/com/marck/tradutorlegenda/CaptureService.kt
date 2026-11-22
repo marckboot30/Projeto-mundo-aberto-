@@ -50,7 +50,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         const val ACTION_STOP = "com.marck.tradutorlegenda.STOP"
         private const val CHANNEL = "tradutor"
         private const val NOTIF_ID = 1
-        private const val GAP_MS = 120L          // pausa entre uma leitura e outra
+        private const val GAP_MS = 30L           // pausa entre uma leitura e outra (quase nenhuma)
         private const val MAX_SIDE = 960f        // tamanho da imagem lida (menor = mais rápido)
     }
 
@@ -355,17 +355,10 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         if (lastTranslation.isNotEmpty() && similar(text, lastTranslation)) return
         if (similar(text, lastDelivered)) return // já falou essa
 
-        if (similar(text, candidate)) {
-            // 2ª leitura igual: legenda confirmada
-            if (!candidateConfirmed) {
-                candidateConfirmed = true
-                candidate = if (text.length >= candidate.length) text else candidate
-                candidateTr?.let { deliver(candidate, it) }
-            }
-            return
-        }
+        // mesma legenda que já está sendo traduzida: não faz nada
+        if (similar(text, candidate)) return
 
-        // legenda nova: já começa a traduzir (ganha tempo)
+        // legenda nova: traduz e fala na hora (sem esperar 2ª leitura)
         candidate = text
         candidateTr = null
         candidateConfirmed = false
@@ -382,7 +375,8 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         translator?.translate(toTranslate)?.addOnSuccessListener { tr ->
             if (myGen != gen || paused) return@addOnSuccessListener
             candidateTr = tr
-            if (candidateConfirmed) deliver(candidate, tr)
+            candidateConfirmed = true
+            deliver(candidate, tr)
         }
     }
 

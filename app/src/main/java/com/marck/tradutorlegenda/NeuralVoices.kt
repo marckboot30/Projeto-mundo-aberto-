@@ -131,36 +131,43 @@ object NeuralVoices {
 }
 
 /**
- * Fala textos com as vozes de IA, uma frase por vez, numa thread própria.
+ * Fala textos com as vozes de IA.
+ * Duas threads: uma gera o áudio, outra toca. Assim, enquanto um pedaço toca,
+ * o próximo já está sendo gerado (começa a falar mais rápido).
  */
 class NeuralSpeaker(
     private val ctx: Context,
     private val onStart: () -> Unit = {},
     private val onDone: () -> Unit = {}
 ) {
-    private class Job(val text: String, val kind: VoiceKind, val speed: Float, val pitch: Float)
+    private class Job(val text: String, val kind: VoiceKind, val speed: Float, val pitch: Float, val epoch: Int)
+    private class Clip(val samples: FloatArray, val rate: Int, val pitch: Float, val epoch: Int, val last: Boolean)
 
-    private val queue = LinkedBlockingDeque<Job>()
+    private val genQueue = LinkedBlockingDeque<Job>()
+    private val playQueue = LinkedBlockingDeque<Clip>()
     private val engines = HashMap<VoiceKind, OfflineTts>()
+    private val epoch = java.util.concurrent.atomic.AtomicInteger(0)
+    private val sentences = java.util.concurrent.atomic.AtomicInteger(0)
     @Volatile private var running = true
-    @Volatile private var cancel = false
-    @Volatile var busy = false
-        private set
-    private var track: AudioTrack? = null
-    private var trackRate = 0
+    @Volatile private var track: AudioTrack? = null
 
-    val pending: Int get() = queue.size + (if (busy) 1 else 0)
+    /** Quantas frases ainda vão ser faladas. */
+    val pending: Int get() = sentences.get()
 
-    private val worker = Thread({ loop() }, "voz-ia").apply { start() }
+    private val generator = Thread({ genLoop() }, "voz-ia-gera").apply { start() }
+    private val player = Thread({ playLoop() }, "voz-ia-toca").apply { start() }
 
     fun speak(text: String, kind: VoiceKind, speed: Float, pitch: Float, flush: Boolean) {
         if (flush) stopAll()
-        queue.offer(Job(text, kind, speed, pitch))
+        sentences.incrementAndGet()
+        genQueue.offer(Job(text, kind, speed, pitch, epoch.get()))
     }
 
     fun stopAll() {
-        queue.clear()
-        cancel = true
+        epoch.incrementAndGet()
+        genQueue.clear()
+        playQueue.clear()
+        sentences.set(0)
         try { track?.pause(); track?.flush() } catch (_: Exception) {}
     }
 
@@ -176,91 +183,128 @@ class NeuralSpeaker(
         return e
     }
 
-    private fun loop() {
+    // corta a frase em pedaços (vírgula, ponto...) para começar a falar antes
+    private fun chunks(text: String): List<String> {
+        val parts = text.split(Regex("(?<=[.!?;:,])\\s+")).map { it.trim() }.filter { it.isNotEmpty() }
+        val out = ArrayList<String>()
+        var acc = ""
+        for (p in parts) {
+            acc = if (acc.isEmpty()) p else "$acc $p"
+            if (acc.split(" ").size >= 3) { out.add(acc); acc = "" }
+        }
+        if (acc.isNotEmpty()) {
+            if (out.isEmpty()) out.add(acc) else out[out.size - 1] = out.last() + " " + acc
+        }
+        return out.ifEmpty { listOf(text) }
+    }
+
+    private fun genLoop() {
         while (running) {
-            val job = try { queue.take() } catch (_: InterruptedException) { break }
-            if (!running) break
-            busy = true
-            cancel = false
+            val job = try { genQueue.take() } catch (_: InterruptedException) { break }
+            if (job.epoch != epoch.get()) continue
+            val pieces = chunks(job.text)
+            var sentLast = false
             try {
                 val eng = synchronized(engines) { engineFor(job.kind) }
-                if (eng != null && !cancel) {
-                    val audio = eng.generate(job.text, 0, job.speed)
-                    if (!cancel && audio.samples.isNotEmpty()) {
-                        onStart()
-                        play(audio.samples, audio.sampleRate, job.pitch)
+                if (eng != null) {
+                    for ((i, piece) in pieces.withIndex()) {
+                        if (job.epoch != epoch.get()) break
+                        val audio = synchronized(engines) { eng.generate(piece, 0, job.speed) }
+                        if (job.epoch != epoch.get()) break
+                        val last = i == pieces.size - 1
+                        playQueue.offer(Clip(audio.samples, audio.sampleRate, job.pitch, job.epoch, last))
+                        if (last) sentLast = true
                     }
                 }
             } catch (_: Throwable) {
-            } finally {
-                busy = false
-                if (queue.isEmpty()) onDone()
+            }
+            if (!sentLast && job.epoch == epoch.get()) {
+                // falhou: avisa o player para descontar a frase
+                playQueue.offer(Clip(FloatArray(0), 22050, 1f, job.epoch, true))
             }
         }
     }
 
-    private fun play(samples: FloatArray, rate: Int, pitch: Float) {
-        if (track == null || trackRate != rate) {
-            track?.release()
-            val min = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
-            track = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build()
-                )
-                .setAudioFormat(
-                    AudioFormat.Builder()
-                        .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
-                        .setSampleRate(rate)
-                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                        .build()
-                )
-                .setBufferSizeInBytes(maxOf(min, rate)) // ~0,25 s
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
-            trackRate = rate
-        }
-        val t = track ?: return
-        // tom (grossa/fina) sem mudar a velocidade
-        try {
-            t.playbackParams = PlaybackParams().setPitch(pitch.coerceIn(0.5f, 2.0f)).setSpeed(1.0f)
-        } catch (_: Exception) {}
-        t.play()
-        var off = 0
-        val chunk = rate / 10
-        while (off < samples.size && !cancel) {
-            val n = minOf(chunk, samples.size - off)
-            val w = t.write(samples, off, n, AudioTrack.WRITE_BLOCKING)
-            if (w <= 0) break
-            off += w
-        }
-        if (!cancel) {
-            // espera terminar de tocar
-            val endFrames = samples.size
-            var waited = 0
-            while (!cancel && waited < 4000) {
-                val pos = try { t.playbackHeadPosition } catch (_: Exception) { endFrames }
-                if (pos >= endFrames) break
-                Thread.sleep(20); waited += 20
+    private fun playLoop() {
+        var speaking = false
+        while (running) {
+            val clip = try {
+                playQueue.poll(150, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) { break }
+            if (clip == null) {
+                if (speaking && sentences.get() == 0) { speaking = false; onDone() }
+                continue
             }
+            if (clip.epoch != epoch.get()) continue
+            if (clip.samples.isNotEmpty()) {
+                if (!speaking) { speaking = true; onStart() }
+                try { play(clip) } catch (_: Throwable) {}
+            }
+            if (clip.last && clip.epoch == epoch.get()) {
+                if (sentences.decrementAndGet() < 0) sentences.set(0)
+            }
+            if (sentences.get() == 0 && playQueue.isEmpty() && speaking) { speaking = false; onDone() }
         }
-        try { t.stop(); t.flush() } catch (_: Exception) {}
-        // AudioTrack conta posição desde o início: recria a cada frase
-        try { t.release() } catch (_: Exception) {}
-        track = null
+    }
+
+    private fun play(clip: Clip) {
+        val rate = clip.rate
+        val min = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
+        val t = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                    .setSampleRate(rate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build()
+            )
+            .setBufferSizeInBytes(maxOf(min, rate)) // ~0,25 s
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+        track = t
+        val myEpoch = clip.epoch
+        try {
+            // tom (grossa/fina) sem mudar a velocidade
+            try {
+                t.playbackParams = PlaybackParams().setPitch(clip.pitch.coerceIn(0.5f, 2.0f)).setSpeed(1.0f)
+            } catch (_: Exception) {}
+            t.play()
+            val samples = clip.samples
+            var off = 0
+            val chunk = rate / 20
+            while (off < samples.size && myEpoch == epoch.get()) {
+                val n = minOf(chunk, samples.size - off)
+                val w = t.write(samples, off, n, AudioTrack.WRITE_BLOCKING)
+                if (w <= 0) break
+                off += w
+            }
+            var waited = 0
+            while (myEpoch == epoch.get() && waited < 4000) {
+                val pos = try { t.playbackHeadPosition } catch (_: Exception) { samples.size }
+                if (pos >= samples.size) break
+                Thread.sleep(10); waited += 10
+            }
+        } finally {
+            track = null
+            try { t.stop() } catch (_: Exception) {}
+            try { t.release() } catch (_: Exception) {}
+        }
     }
 
     fun release() {
         running = false
         stopAll()
-        worker.interrupt()
+        generator.interrupt()
+        player.interrupt()
         synchronized(engines) {
             engines.values.forEach { try { it.release() } catch (_: Throwable) {} }
             engines.clear()
         }
-        try { track?.release() } catch (_: Exception) {}
-        track = null
     }
 }
