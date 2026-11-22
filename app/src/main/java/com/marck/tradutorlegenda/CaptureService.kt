@@ -84,6 +84,8 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private var area = 0.35f
     private var speed = 1.25f
     private var duck = true
+    private var pitch = 1.0f
+    private var voiceName = ""
     private var focusReq: android.media.AudioFocusRequest? = null
     private var hasFocus = false
     private val releaseFocus = Runnable { abandonFocus() }
@@ -133,6 +135,9 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         speakOn = intent.getBooleanExtra("speak", true)
         showSub = intent.getBooleanExtra("showSub", true)
         duck = intent.getBooleanExtra("duck", true)
+        pitch = intent.getFloatExtra("pitch", 1.0f)
+        voiceName = intent.getStringExtra("voice") ?: ""
+        if (ttsReady) applyVoiceSettings()
         val showBubble = intent.getBooleanExtra("bubble", true)
         paused = false
         resetState()
@@ -350,6 +355,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         val t = tts ?: return
         t.language = Locale("pt", "BR")
         t.setAudioAttributes(speechAttrs)
+        applyVoiceSettings()
         t.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {}
             override fun onDone(utteranceId: String?) { finished() }
@@ -361,6 +367,17 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             }
         })
         ttsReady = true
+    }
+
+    // voz escolhida + tom (grossa/fina)
+    private fun applyVoiceSettings() {
+        val t = tts ?: return
+        if (voiceName.isNotEmpty()) {
+            try {
+                t.voices?.firstOrNull { it.name == voiceName }?.let { t.voice = it }
+            } catch (_: Exception) {}
+        }
+        t.setPitch(pitch)
     }
 
     private fun finished() {
