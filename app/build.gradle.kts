@@ -11,8 +11,8 @@ android {
         applicationId = "com.marck.tradutorlegenda"
         minSdk = 26
         targetSdk = 35
-        versionCode = 12
-        versionName = "2.5"
+        versionCode = 13
+        versionName = "2.6"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }

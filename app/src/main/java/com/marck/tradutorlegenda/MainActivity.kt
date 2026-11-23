@@ -55,6 +55,7 @@ class MainActivity : Activity() {
         "🇧🇷  Português (Brasil) — só ler em voz alta" to TranslateLanguage.PORTUGUESE
     )
     private val areas = listOf(
+        "📦 Caixa ajustável (recomendado)" to -1f,
         "Parte de baixo (25%)" to 0.25f,
         "Parte de baixo (35%)" to 0.35f,
         "Metade de baixo" to 0.5f,
@@ -143,7 +144,7 @@ class MainActivity : Activity() {
         langSpinner = spinner(langs.map { it.first }, prefs.getInt("lang", 0))
         cVideo.addView(langSpinner)
         cVideo.addView(fieldLabel("Onde fica a legenda"))
-        areaSpinner = spinner(areas.map { it.first }, prefs.getInt("area", 1))
+        areaSpinner = spinner(areas.map { it.first }, prefs.getInt("area2", 0))
         cVideo.addView(areaSpinner)
         root.addView(cVideo)
 
@@ -295,6 +296,7 @@ class MainActivity : Activity() {
                 "2. Permita a captura de tela (escolha \"Tela inteira\").\n" +
                 "3. Abra o vídeo com a legenda ligada.\n" +
                 "Modo Automático (teste): olha o rosto de quem mexe a boca e escolhe voz de homem ou mulher. Erra quando a pessoa não aparece, está de lado ou em desenho/anime.\n" +
+                "Caixa de leitura: a moldura branca aparece na tela. Arraste pelo ✥ e mude o tamanho pelo ⤡. O app só lê o que está dentro dela. O contorno verde mostra o que ele reconheceu.\n" +
                 "4. Bolinha 🎧: toque = pausar/continuar, segure = desligar.\n" +
                 "5. A legenda traduzida aparece em cima; arraste ou toque para esconder.\n\n" +
                 "Na 1ª vez ele baixa o idioma (~30 MB): use Wi‑Fi.\n" +
@@ -469,7 +471,7 @@ class MainActivity : Activity() {
     private fun askCapture() {
         getSharedPreferences("cfg", MODE_PRIVATE).edit()
             .putInt("lang", langSpinner.selectedItemPosition)
-            .putInt("area", areaSpinner.selectedItemPosition)
+            .putInt("area2", areaSpinner.selectedItemPosition)
             .putInt("pitchP", pitchBar.progress)
             .putInt("speedP", speedBar.progress)
             .putString("voice", selectedVoiceName())
@@ -479,7 +481,8 @@ class MainActivity : Activity() {
             .putBoolean("bubble", swBubble.isChecked)
             .putBoolean("duck", swDuck.isChecked)
             .apply()
-        if ((swSub.isChecked || swBubble.isChecked) && !Settings.canDrawOverlays(this)) {
+        val needOverlay = swSub.isChecked || swBubble.isChecked || areas[areaSpinner.selectedItemPosition].second < 0f
+        if (needOverlay && !Settings.canDrawOverlays(this)) {
             setStatus(false, "Permita \"Sobrepor a outros apps\" e toque em COMEÇAR de novo")
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             return
