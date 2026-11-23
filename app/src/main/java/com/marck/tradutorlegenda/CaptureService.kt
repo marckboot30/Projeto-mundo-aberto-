@@ -93,6 +93,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     @Volatile private var boxFrac: android.graphics.RectF? = null
     @Volatile private var lastCrop = Rect()
     private var srcLang = TranslateLanguage.ENGLISH
+    private var useOnline = true
     private var corrections: List<Pair<String, String>> = emptyList()
     private var voiceMode = "sistema"   // sistema | ia_m | ia_f | auto
     private var neural: NeuralSpeaker? = null
@@ -146,6 +147,7 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         }
         val lang = intent.getStringExtra("lang") ?: TranslateLanguage.ENGLISH
         srcLang = lang
+        useOnline = intent.getBooleanExtra("online", true)
         corrections = TextFixer.loadCorrections(this)
         area = intent.getFloatExtra("area", 0.35f)
         readBox?.remove(); readBox = null; boxFrac = null
@@ -457,16 +459,58 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             return
         }
         val tr0 = translator ?: return
-        val tasks = segments.map { tr0.translate(it) }
-        com.google.android.gms.tasks.Tasks.whenAllSuccess<String>(tasks).addOnSuccessListener(mainExec) { list ->
-            if (myGen != gen || paused) return@addOnSuccessListener
-            val joined = list.map { it.trim() }.filter { it.isNotEmpty() }
-                .joinToString(" ") { t -> if (list.size == 1 || t.last() in ".!?…") t else "$t." }
-            val tr = TextFixer.applyCorrections(joined, corrections)
-            if (tr.isEmpty()) return@addOnSuccessListener
+
+        // Corrida: tradução online (melhor) x sem internet (rápida).
+        // Usa a online se chegar a tempo; senão usa a sem internet.
+        var finished = false
+        var offline: String? = null
+        var onlineFailed = !useOnline || !OnlineTranslator.available()
+        val myText = candidate
+
+        fun join(list: List<String>) = list.map { it.trim() }.filter { it.isNotEmpty() }
+            .joinToString(" ") { t -> if (list.size == 1 || t.last() in ".!?…") t else "$t." }
+
+        fun finish(raw: String) {
+            if (finished || myGen != gen || paused) return
+            finished = true
+            val tr = TextFixer.applyCorrections(raw, corrections)
+            if (tr.isEmpty()) return
             candidateTr = tr
             candidateConfirmed = true
-            deliver(candidate, tr)
+            deliver(myText, tr)
+        }
+
+        val tasks = segments.map { tr0.translate(it) }
+        com.google.android.gms.tasks.Tasks.whenAllSuccess<String>(tasks).addOnSuccessListener(mainExec) { list ->
+            offline = join(list)
+            if (onlineFailed) finish(offline!!)
+        }
+
+        if (!onlineFailed) {
+            val results = arrayOfNulls<String>(segments.size)
+            var pendingOnline = segments.size
+            segments.forEachIndexed { i, seg ->
+                OnlineTranslator.translateAsync(seg, srcLang) { res ->
+                    main.post {
+                        if (finished || myGen != gen) return@post
+                        if (res == null) {
+                            onlineFailed = true
+                            offline?.let { finish(it) }
+                            return@post
+                        }
+                        results[i] = res
+                        pendingOnline--
+                        if (pendingOnline == 0 && !onlineFailed) finish(join(results.filterNotNull()))
+                    }
+                }
+            }
+            // não espera demais pela online
+            main.postDelayed({
+                if (!finished && myGen == gen) {
+                    onlineFailed = true
+                    offline?.let { finish(it) }
+                }
+            }, 1300)
         }
     }
 

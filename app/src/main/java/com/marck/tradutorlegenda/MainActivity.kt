@@ -85,6 +85,7 @@ class MainActivity : Activity() {
     private lateinit var swDuck: Switch
     private lateinit var swSub: Switch
     private lateinit var swBubble: Switch
+    private lateinit var swOnline: Switch
 
     private var tts: TextToSpeech? = null
     private var voices: List<Voice> = emptyList()
@@ -146,6 +147,9 @@ class MainActivity : Activity() {
         cVideo.addView(fieldLabel("Onde fica a legenda"))
         areaSpinner = spinner(areas.map { it.first }, prefs.getInt("area2", 0))
         cVideo.addView(areaSpinner)
+        swOnline = switch("🌐 Tradução online (melhor, usa internet)", prefs.getBoolean("online", true))
+        cVideo.addView(swOnline)
+        cVideo.addView(txt("Se a internet falhar ou demorar, usa o tradutor sem internet automaticamente.", 12.5f, muted))
         root.addView(cVideo)
 
         // ---------- Card: voz ----------
@@ -480,6 +484,7 @@ class MainActivity : Activity() {
             .putBoolean("showSub", swSub.isChecked)
             .putBoolean("bubble", swBubble.isChecked)
             .putBoolean("duck", swDuck.isChecked)
+            .putBoolean("online", swOnline.isChecked)
             .apply()
         val needOverlay = swSub.isChecked || swBubble.isChecked || areas[areaSpinner.selectedItemPosition].second < 0f
         if (needOverlay && !Settings.canDrawOverlays(this)) {
@@ -527,6 +532,7 @@ class MainActivity : Activity() {
             putExtra("showSub", swSub.isChecked)
             putExtra("bubble", swBubble.isChecked)
             putExtra("duck", swDuck.isChecked)
+            putExtra("online", swOnline.isChecked)
         }
         startForegroundService(i)
         setStatus(true, "Rodando — abra seu vídeo")
