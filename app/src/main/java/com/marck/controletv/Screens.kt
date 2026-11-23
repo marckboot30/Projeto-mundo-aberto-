@@ -84,7 +84,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.graphics.BitmapFactory
 import android.view.HapticFeedbackConstants
+import androidx.compose.foundation.Image
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -359,23 +367,8 @@ fun RemoteScreen(vm: RemoteViewModel, tv: TvDevice) {
             NumberPad { vm.press(Key.digit(it)) }
         }
 
-        val apps = vm.apps
-        if (apps.isNotEmpty()) {
-            Spacer(Modifier.height(26.dp))
-            Text("Abrir app", color = Palette.Muted, fontSize = 13.sp, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(10.dp))
-            LazyRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                items(apps) { app ->
-                    Box(
-                        Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(app.color)
-                            .clickable { vm.launch(app) }
-                            .padding(horizontal = 18.dp, vertical = 14.dp),
-                    ) { Text(app.label, color = app.text, fontWeight = FontWeight.Bold) }
-                }
-            }
-        }
+        Spacer(Modifier.height(28.dp))
+        AppsSection(vm)
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -445,6 +438,88 @@ private fun NumberPad(onDigit: (Int) -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun AppsSection(vm: RemoteViewModel) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text("Apps da TV", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 17.sp, modifier = Modifier.weight(1f))
+        if (vm.appsLoading) {
+            CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Palette.Accent2)
+        } else {
+            Icon(
+                Icons.Rounded.Refresh, "Atualizar apps", tint = Palette.Muted,
+                modifier = Modifier.size(36.dp).clip(CircleShape).clickable { vm.loadApps() }.padding(7.dp),
+            )
+        }
+    }
+    if (!vm.appsAreInstalled) {
+        Text(
+            "Esta TV não informa quais apps estão instalados, então aparecem os mais usados. Se o app não estiver na TV, ela pode abrir a Play Store.",
+            color = Palette.Muted, fontSize = 12.sp, modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+        )
+    }
+    Spacer(Modifier.height(12.dp))
+    if (!vm.appsLoading && vm.tvApps.isEmpty()) {
+        Text("Não consegui ler os apps da TV. Toque em atualizar para tentar de novo.", color = Palette.Muted, fontSize = 13.sp, modifier = Modifier.fillMaxWidth())
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        vm.tvApps.chunked(4).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                row.forEach { app -> AppTile(app, Modifier.weight(1f)) { vm.open(app) } }
+                repeat(4 - row.size) { Spacer(Modifier.weight(1f)) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppTile(app: TvApp, modifier: Modifier, onClick: () -> Unit) {
+    val icon = rememberIcon(app.icon)
+    Column(
+        modifier.clip(RoundedCornerShape(14.dp)).clickable(onClick = onClick).padding(vertical = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            Modifier.size(62.dp).clip(RoundedCornerShape(18.dp))
+                .background(if (icon != null) Palette.CardHi else app.color),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (icon != null) {
+                Image(icon, app.name, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            } else {
+                Text(
+                    app.name.trim().take(1).uppercase(), color = Color.White,
+                    fontSize = 26.sp, fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            app.name, color = Color.White, fontSize = 11.sp, maxLines = 2,
+            overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center, lineHeight = 13.sp,
+        )
+    }
+}
+
+private val iconCache = java.util.concurrent.ConcurrentHashMap<String, ImageBitmap>()
+
+/** Baixa o ícone do app direto da TV (Roku e LG mandam ícone). */
+@Composable
+private fun rememberIcon(url: String?): ImageBitmap? {
+    val state = produceState(initialValue = url?.let { iconCache[it] }, url) {
+        if (url == null || value != null) return@produceState
+        value = withContext(Dispatchers.IO) {
+            runCatching {
+                Net.images.newCall(okhttp3.Request.Builder().url(url).build()).execute().use { r ->
+                    val bytes = r.body?.bytes() ?: return@use null
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                }
+            }.getOrNull()
+        }?.also { iconCache[url] = it }
+    }
+    return state.value
 }
 
 /** Botão redondo com vibração leve, animação ao apertar e repetição ao segurar. */

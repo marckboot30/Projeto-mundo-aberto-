@@ -20,13 +20,6 @@ class LgController(override val tv: TvDevice, private val store: Store) : TvCont
     private val ids = AtomicInteger()
     private var playing = true
 
-    override val apps = mapOf(
-        StreamApp.NETFLIX to "netflix",
-        StreamApp.YOUTUBE to "youtube.leanback.v4",
-        StreamApp.PRIME to "amazon",
-        StreamApp.DISNEY to "com.disney.disneyplus-prod",
-    )
-
     private val keyKey get() = "lg_key_${tv.ip}"
 
     private val permissions = listOf(
@@ -145,9 +138,20 @@ class LgController(override val tv: TvDevice, private val store: Store) : TvCont
         return doPress(key)
     }
 
-    override suspend fun launch(app: StreamApp): Boolean {
-        val id = apps[app] ?: return false
-        return request("ssap://system.launcher/launch", JSONObject().put("id", id)) != null
+    override suspend fun installedApps(): List<TvApp> {
+        if (!alive && connect() !is ConnectResult.Ok) return emptyList()
+        val res = request("ssap://com.webos.applicationManager/listLaunchPoints") ?: return emptyList()
+        val arr = res.optJSONObject("payload")?.optJSONArray("launchPoints") ?: return emptyList()
+        return List(arr.length()) { arr.getJSONObject(it) }.mapNotNull { a ->
+            val id = a.optString("id").ifEmpty { return@mapNotNull null }
+            val icon = a.optString("largeIcon").ifEmpty { a.optString("icon") }.takeIf { it.startsWith("http") }
+            TvApp(id, a.optString("title").ifEmpty { id }, icon)
+        }
+    }
+
+    override suspend fun open(app: TvApp): Boolean {
+        if (!alive && connect() !is ConnectResult.Ok) return false
+        return request("ssap://system.launcher/launch", JSONObject().put("id", app.id)) != null
     }
 
     override fun close() {

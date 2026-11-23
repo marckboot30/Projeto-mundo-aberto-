@@ -43,12 +43,34 @@ enum class Key {
     }
 }
 
-enum class StreamApp(val label: String, val color: Color, val text: Color = Color.White) {
-    NETFLIX("Netflix", Color(0xFFE50914)),
-    YOUTUBE("YouTube", Color(0xFFFF0033)),
-    PRIME("Prime Video", Color(0xFF00A8E1)),
-    DISNEY("Disney+", Color(0xFF113CCF)),
-    GLOBOPLAY("Globoplay", Color(0xFFFB0234)),
+/** Um app instalado na TV. */
+data class TvApp(val id: String, val name: String, val icon: String? = null) {
+    /** Cor do quadradinho quando não tem ícone. */
+    val color: Color
+        get() {
+            val n = name.lowercase()
+            return when {
+                "netflix" in n -> Color(0xFFE50914)
+                "youtube" in n -> Color(0xFFFF0033)
+                "prime" in n || "amazon" in n -> Color(0xFF00A8E1)
+                "disney" in n -> Color(0xFF113CCF)
+                "globo" in n -> Color(0xFFFB4A1F)
+                "max" == n || "hbo" in n -> Color(0xFF002BE7)
+                "spotify" in n -> Color(0xFF1DB954)
+                "pluto" in n -> Color(0xFF2B2B2B)
+                "paramount" in n -> Color(0xFF0064FF)
+                "crunchyroll" in n -> Color(0xFFF47521)
+                "twitch" in n -> Color(0xFF9146FF)
+                else -> palette[(n.hashCode() and 0x7FFFFFFF) % palette.size]
+            }
+        }
+
+    companion object {
+        private val palette = listOf(
+            Color(0xFF7C5CFF), Color(0xFF3FA9F5), Color(0xFF00B894), Color(0xFFE17055),
+            Color(0xFFD63384), Color(0xFF6C5CE7), Color(0xFF0984E3), Color(0xFFE84393),
+        )
+    }
 }
 
 sealed interface ConnectResult {
@@ -63,8 +85,10 @@ interface TvController {
     suspend fun submitCode(code: String): ConnectResult = ConnectResult.Error("Essa TV não usa código")
     /** Retorna false se a conexão caiu. */
     suspend fun press(key: Key): Boolean
-    val apps: Map<StreamApp, String>
-    suspend fun launch(app: StreamApp): Boolean
+    /** false = a TV não informa os apps instalados (aí mostramos os mais comuns). */
+    val listsInstalled: Boolean get() = true
+    suspend fun installedApps(): List<TvApp>
+    suspend fun open(app: TvApp): Boolean
     fun close()
 }
 
@@ -104,6 +128,9 @@ object Net {
             .readTimeout(0, TimeUnit.SECONDS)
             .build()
     }
+
+    /** Para baixar ícones (com tempo limite). */
+    val images: OkHttpClient by lazy { client.newBuilder().readTimeout(6, TimeUnit.SECONDS).build() }
 
     fun http(url: String, method: String = "GET", timeout: Int = 3000): String? = try {
         val c = URL(url).openConnection() as HttpURLConnection

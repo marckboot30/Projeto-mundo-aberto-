@@ -24,12 +24,31 @@ class AndroidTvController(override val tv: TvDevice, private val store: Store) :
     private var pairSock: SSLSocket? = null
     private var serverCert: X509Certificate? = null
 
-    override val apps = mapOf(
-        StreamApp.NETFLIX to "https://www.netflix.com/title",
-        StreamApp.YOUTUBE to "https://www.youtube.com",
-        StreamApp.PRIME to "https://app.primevideo.com",
-        StreamApp.DISNEY to "https://www.disneyplus.com",
-        StreamApp.GLOBOPLAY to "https://globoplay.globo.com",
+    // O Android TV não informa os apps instalados, então mostramos os mais usados no Brasil.
+    // Se o app estiver na TV ele abre; se não, a TV pode abrir a Play Store.
+    override val listsInstalled get() = false
+
+    override suspend fun installedApps() = listOf(
+        TvApp("com.netflix.ninja", "Netflix"),
+        TvApp("com.google.android.youtube.tv", "YouTube"),
+        TvApp("com.amazon.amazonvideo.livingroom", "Prime Video"),
+        TvApp("com.disney.disneyplus", "Disney+"),
+        TvApp("com.wbd.stream", "Max"),
+        TvApp("com.globo.globotv", "Globoplay"),
+        TvApp("com.spotify.tv.android", "Spotify"),
+        TvApp("com.google.android.youtube.tvmusic", "YouTube Music"),
+        TvApp("tv.pluto.android", "Pluto TV"),
+        TvApp("com.cbs.ott", "Paramount+"),
+        TvApp("com.crunchyroll.crunchyroid", "Crunchyroll"),
+        TvApp("com.apple.atve.androidtv.appletv", "Apple TV"),
+        TvApp("tv.twitch.android.app", "Twitch"),
+        TvApp("deezer.android.tv", "Deezer"),
+        TvApp("com.plexapp.android", "Plex"),
+        TvApp("org.xbmc.kodi", "Kodi"),
+        TvApp("org.videolan.vlc", "VLC"),
+        TvApp("com.liskovsoft.smarttubetv.beta", "SmartTube"),
+        TvApp("com.android.vending", "Play Store"),
+        TvApp("com.android.tv.settings", "Configurações"),
     )
 
     override suspend fun connect(): ConnectResult = withContext(Dispatchers.IO) {
@@ -94,8 +113,8 @@ class AndroidTvController(override val tv: TvDevice, private val store: Store) :
         return sendOrReconnect(Pb().msg(10, Pb().int(1, code).int(2, 3)))
     }
 
-    override suspend fun launch(app: StreamApp): Boolean {
-        val link = apps[app] ?: return false
+    override suspend fun open(app: TvApp): Boolean {
+        val link = if ("://" in app.id) app.id else "market://launch?id=${app.id}"
         return sendOrReconnect(Pb().msg(90, Pb().str(1, link)))
     }
 

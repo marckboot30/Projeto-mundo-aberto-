@@ -17,12 +17,7 @@ class SamsungController(override val tv: TvDevice, private val store: Store) : T
     @Volatile private var alive = false
     private var playing = true
 
-    override val apps = mapOf(
-        StreamApp.NETFLIX to "3201907018807",
-        StreamApp.YOUTUBE to "111299001912",
-        StreamApp.PRIME to "3201910019365",
-        StreamApp.DISNEY to "3201901017640",
-    )
+    @Volatile private var appsReply: CompletableDeferred<List<TvApp>>? = null
 
     private val tokenKey get() = "samsung_token_${tv.ip}"
 
@@ -53,6 +48,14 @@ class SamsungController(override val tv: TvDevice, private val store: Store) : T
                         result.complete(ConnectResult.Ok)
                     }
                     "ms.channel.unauthorized" -> result.complete(ConnectResult.Error("A TV recusou. Aceite o pedido na TV ou libere em Configurações > Geral > Gerenciador de dispositivos externos."))
+                    "ed.installedApp.get" -> {
+                        val arr = j.optJSONObject("data")?.optJSONArray("data")
+                        val list = if (arr == null) emptyList() else List(arr.length()) { arr.getJSONObject(it) }.mapNotNull { a ->
+                            val id = a.optString("appId").ifEmpty { return@mapNotNull null }
+                            TvApp(id, a.optString("name").ifEmpty { id })
+                        }
+                        appsReply?.complete(list)
+                    }
                     "ms.channel.timeOut" -> result.complete(ConnectResult.Error("Tempo esgotado. Tente de novo e aceite na TV."))
                 }
             }
@@ -94,16 +97,25 @@ class SamsungController(override val tv: TvDevice, private val store: Store) : T
         return sendKey(code)
     }
 
-    override suspend fun launch(app: StreamApp): Boolean {
-        val id = apps[app] ?: return false
+    override suspend fun installedApps(): List<TvApp> {
+        if (!alive && connect() !is ConnectResult.Ok) return emptyList()
+        val d = CompletableDeferred<List<TvApp>>()
+        appsReply = d
+        val j = JSONObject().put("method", "ms.channel.emit").put("params", JSONObject()
+            .put("event", "ed.installedApp.get").put("to", "host"))
+        if (ws?.send(j.toString()) != true) return emptyList()
+        return withTimeoutOrNull(6000) { d.await() } ?: emptyList()
+    }
+
+    override suspend fun open(app: TvApp): Boolean {
         val s = ws
         if (s != null && alive) {
             val j = JSONObject().put("method", "ms.channel.emit").put("params", JSONObject()
                 .put("event", "ed.apps.launch").put("to", "host")
-                .put("data", JSONObject().put("appId", id).put("action_type", "DEEP_LINK")))
+                .put("data", JSONObject().put("appId", app.id).put("action_type", "DEEP_LINK")))
             if (s.send(j.toString())) return true
         }
-        return withContext(Dispatchers.IO) { Net.http("http://${tv.ip}:8001/api/v2/applications/$id", "POST") != null }
+        return withContext(Dispatchers.IO) { Net.http("http://${tv.ip}:8001/api/v2/applications/${app.id}", "POST") != null }
     }
 
     override fun close() {

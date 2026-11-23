@@ -5,12 +5,13 @@ import kotlinx.coroutines.withContext
 
 /** Roku TV (TCL Roku, AOC Roku, Philco Roku...). Usa comandos HTTP na porta 8060. */
 class RokuController(override val tv: TvDevice) : TvController {
-    override val apps = mapOf(
-        StreamApp.NETFLIX to "12",
-        StreamApp.YOUTUBE to "837",
-        StreamApp.PRIME to "13",
-        StreamApp.DISNEY to "291097",
-    )
+    override suspend fun installedApps(): List<TvApp> = withContext(Dispatchers.IO) {
+        val xml = Net.http("$base/query/apps") ?: return@withContext emptyList()
+        Regex("""<app id="([^"]+)"[^>]*type="appl"[^>]*>(.*?)</app>""").findAll(xml).map {
+            val id = it.groupValues[1]
+            TvApp(id, it.groupValues[2].replace("&amp;", "&").trim(), "$base/query/icon/$id")
+        }.toList()
+    }
 
     private val base get() = "http://${tv.ip}:8060"
 
@@ -32,9 +33,8 @@ class RokuController(override val tv: TvDevice) : TvController {
         return withContext(Dispatchers.IO) { Net.http("$base/keypress/$k", "POST") != null }
     }
 
-    override suspend fun launch(app: StreamApp): Boolean {
-        val id = apps[app] ?: return false
-        return withContext(Dispatchers.IO) { Net.http("$base/launch/$id", "POST") != null }
+    override suspend fun open(app: TvApp): Boolean {
+        return withContext(Dispatchers.IO) { Net.http("$base/launch/${app.id}", "POST") != null }
     }
 
     override fun close() {}

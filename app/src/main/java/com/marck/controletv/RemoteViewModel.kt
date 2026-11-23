@@ -34,7 +34,12 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
     private var ctrl: TvController? = null
     private var connectJob: Job? = null
 
-    val apps: List<StreamApp> get() = ctrl?.apps?.keys?.toList() ?: emptyList()
+    val tvApps = mutableStateListOf<TvApp>()
+    var appsLoading by mutableStateOf(false)
+        private set
+    var appsAreInstalled by mutableStateOf(true)
+        private set
+    private var appsJob: Job? = null
 
     init {
         tvs.addAll(store.savedTvs)
@@ -78,6 +83,8 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
 
     fun select(d: TvDevice) {
         connectJob?.cancel()
+        appsJob?.cancel()
+        tvApps.clear()
         ctrl?.close()
         current = d
         store.lastTvId = d.id
@@ -97,6 +104,24 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
             ConnectResult.Ok -> Conn.Connected
             ConnectResult.NeedCode -> Conn.NeedCode()
             is ConnectResult.Error -> Conn.Failed(r.msg)
+        }
+        if (r == ConnectResult.Ok) loadApps()
+    }
+
+    /** Busca na TV todos os apps instalados. */
+    fun loadApps() {
+        val c = ctrl ?: return
+        appsJob?.cancel()
+        appsLoading = true
+        appsAreInstalled = c.listsInstalled
+        appsJob = viewModelScope.launch {
+            val list = try { c.installedApps() } catch (e: Exception) { emptyList() }
+            if (ctrl === c) {
+                tvApps.clear()
+                val l = list.distinctBy { it.id }
+                tvApps.addAll(if (c.listsInstalled) l.sortedBy { it.name.lowercase() } else l)
+            }
+            appsLoading = false
         }
     }
 
@@ -129,10 +154,10 @@ class RemoteViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun launch(app: StreamApp) {
+    fun open(app: TvApp) {
         val c = ctrl ?: return
         viewModelScope.launch {
-            if (!c.launch(app)) toast = "Não consegui abrir o ${app.label}"
+            if (!c.open(app)) toast = "Não consegui abrir o ${app.name}"
         }
     }
 

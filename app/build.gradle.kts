@@ -12,8 +12,8 @@ android {
         applicationId = "com.marck.controletv"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
     }
 
     // Assinatura fixa: as próximas versões instalam por cima sem desinstalar
