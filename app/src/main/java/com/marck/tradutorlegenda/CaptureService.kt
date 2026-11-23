@@ -9,7 +9,6 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.media.AudioAttributes
@@ -21,7 +20,6 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
-import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.util.DisplayMetrics
@@ -88,10 +86,6 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     private var speed = 1.25f
     private var duck = true
     private var pitch = 1.0f
-    // caixa de leitura ajustável
-    private var readBox: ReadBox? = null
-    @Volatile private var boxFrac: android.graphics.RectF? = null
-    @Volatile private var lastCrop = Rect()
     private var srcLang = TranslateLanguage.ENGLISH
     private var useOnline = true
     private var corrections: List<Pair<String, String>> = emptyList()
@@ -150,23 +144,6 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         useOnline = intent.getBooleanExtra("online", true)
         corrections = TextFixer.loadCorrections(this)
         area = intent.getFloatExtra("area", 0.35f)
-        readBox?.remove(); readBox = null; boxFrac = null
-        if (area < 0f) {
-            val pr = getSharedPreferences("cfg", MODE_PRIVATE)
-            val f = android.graphics.RectF(
-                pr.getFloat("boxL", 0.05f), pr.getFloat("boxT", 0.72f),
-                pr.getFloat("boxR", 0.95f), pr.getFloat("boxB", 0.92f)
-            )
-            boxFrac = f
-            if (Settings.canDrawOverlays(this)) {
-                readBox = ReadBox(this, f) { nf ->
-                    boxFrac = nf
-                    pr.edit().putFloat("boxL", nf.left).putFloat("boxT", nf.top)
-                        .putFloat("boxR", nf.right).putFloat("boxB", nf.bottom).apply()
-                    lastSeenReset()
-                }.also { it.show() }
-            }
-        }
         speed = intent.getFloatExtra("speed", 1.25f)
         speakOn = intent.getBooleanExtra("speak", true)
         showSub = intent.getBooleanExtra("showSub", true)
@@ -281,7 +258,6 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         vd.resize(w, h, dpi)
         vd.surface = reader!!.surface
         old?.close()
-        main.post { readBox?.layout() }
     }
 
     private fun next(delay: Long = GAP_MS) {
@@ -298,15 +274,13 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
                 grab()
             } catch (_: Exception) { null }
             if (crop == null) { next(80); return }
-            val cropAt = lastCrop
-            val cw = capW; val ch = capH
             recognizer.process(InputImage.fromBitmap(crop, 0))
                 .addOnSuccessListener(mainExec) { result ->
-                    val good = result.textBlocks
+                    val lines = result.textBlocks
                         .flatMap { it.lines }
-                        .filter { isSubtitleLine(it.text.trim()) }
-                    onText(good.joinToString(" ") { it.text.trim() }.trim())
-                    showHighlight(good.mapNotNull { it.boundingBox }, cropAt, cw, ch)
+                        .map { it.text.trim() }
+                        .filter { isSubtitleLine(it) }
+                    onText(lines.joinToString(" ").trim())
                 }
                 .addOnCompleteListener(mainExec) {
                     crop.recycle()
@@ -323,23 +297,8 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
             val rowPadding = plane.rowStride - pixelStride * img.width
             val full = Bitmap.createBitmap(img.width + rowPadding / pixelStride, img.height, Bitmap.Config.ARGB_8888)
             full.copyPixelsFromBuffer(plane.buffer)
-            val bf = boxFrac
-            val cropRect = if (bf != null) {
-                // só dentro da caixa (um pouquinho para dentro, para não ler a moldura)
-                val inset = 5
-                val l = (bf.left * img.width).roundToInt() + inset
-                val t = (bf.top * img.height).roundToInt() + inset
-                val r = (bf.right * img.width).roundToInt() - inset
-                val b = (bf.bottom * img.height).roundToInt() - inset
-                Rect(l.coerceIn(0, img.width - 2), t.coerceIn(0, img.height - 2),
-                    r.coerceIn(2, img.width), b.coerceIn(2, img.height))
-            } else {
-                val top = (img.height * (1f - area)).roundToInt().coerceIn(0, img.height - 1)
-                Rect(0, top, img.width, img.height)
-            }
-            if (cropRect.width() < 2 || cropRect.height() < 2) { full.recycle(); return null }
-            lastCrop = Rect(cropRect)
-            val crop = Bitmap.createBitmap(full, cropRect.left, cropRect.top, cropRect.width(), cropRect.height())
+            val top = (img.height * (1f - area)).roundToInt().coerceIn(0, img.height - 1)
+            val crop = Bitmap.createBitmap(full, 0, top, img.width, img.height - top)
             feedDetector(full)
             if (crop !== full) full.recycle()
             return crop
@@ -360,26 +319,6 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
         )
         if (small === full) return
         d.process(small)
-    }
-
-    // contorno verde em volta do que foi reconhecido
-    private fun showHighlight(boxes: List<Rect>, cropAt: Rect, cw: Int, ch: Int) {
-        val rb = readBox ?: return
-        if (boxes.isEmpty() || cw <= 0 || ch <= 0) return
-        val u = Rect(boxes[0])
-        for (b in boxes) u.union(b)
-        val sx = rb.screenW().toFloat() / cw
-        val sy = rb.screenH().toFloat() / ch
-        rb.highlight(
-            Rect(
-                ((cropAt.left + u.left) * sx).roundToInt(), ((cropAt.top + u.top) * sy).roundToInt(),
-                ((cropAt.left + u.right) * sx).roundToInt(), ((cropAt.top + u.bottom) * sy).roundToInt()
-            )
-        )
-    }
-
-    private fun lastSeenReset() {
-        candidate = ""; candidateTr = null
     }
 
     // Ignora botões, tempo do vídeo e outras coisas que não são fala
@@ -698,7 +637,6 @@ class CaptureService : Service(), TextToSpeech.OnInitListener {
     override fun onDestroy() {
         stopCapture()
         overlay?.removeAll(); overlay = null
-        readBox?.remove(); readBox = null
         neural?.release(); neural = null
         detector?.close(); detector = null
         main.removeCallbacks(releaseFocus)
