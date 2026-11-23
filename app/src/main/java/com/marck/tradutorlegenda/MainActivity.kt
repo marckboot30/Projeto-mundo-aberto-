@@ -131,6 +131,21 @@ class MainActivity : Activity() {
         header.addView(titles)
         root.addView(header)
 
+        // ---------- Botão do controle de TV ----------
+        val tvBtn = txt("📺  Controle de TV", 17f, fg, bold = true)
+        tvBtn.gravity = Gravity.CENTER
+        tvBtn.setPadding(dp(16), dp(14), dp(16), dp(14))
+        tvBtn.background = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(Color.rgb(124, 92, 255), Color.rgb(63, 169, 245)),
+        ).apply { cornerRadius = dp(18).toFloat() }
+        tvBtn.setOnClickListener {
+            startActivity(android.content.Intent(this, com.marck.controletv.ControleTvActivity::class.java))
+        }
+        root.addView(tvBtn, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(14) })
+
         status = txt("○ Parado", 14f, muted)
         status.setPadding(dp(14), dp(8), dp(14), dp(8))
         status.background = round(cardC, 50)

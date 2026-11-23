@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 android {
@@ -11,8 +12,8 @@ android {
         applicationId = "com.marck.tradutorlegenda"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "2.8"
+        versionCode = 16
+        versionName = "2.9"
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
         }
@@ -44,6 +45,9 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    buildFeatures {
+        compose = true
+    }
 }
 
 dependencies {
@@ -55,5 +59,16 @@ dependencies {
     implementation("com.google.mlkit:face-detection:16.1.7")
     // Teste: estimar homem/mulher pelo rosto
     implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    // Controle de TV pelo Wi-Fi (tela feita com Compose)
+    implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.foundation:foundation")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.activity:activity-compose:1.9.3")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // Vozes de IA (sherpa-onnx): as bibliotecas .so são baixadas pelo GitHub Actions
 }
